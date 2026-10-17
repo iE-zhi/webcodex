@@ -4,6 +4,15 @@ use webcodex_core::authority::OAuthRouteScopePolicy::*;
 
 pub(super) const ROUTES: &[RouteSpec] = &[
     route(
+        ContinuationLocalLease,
+        Post,
+        "/api/shell/agent/continuation",
+        AgentSurface,
+        RunnerTransport,
+        Other,
+        AuthMiddleware,
+    ),
+    route(
         RunnerRegister,
         Post,
         "/api/shell/agent/register",

@@ -1,5 +1,7 @@
 # WebCodex
 
+Server-owned Continue and Goal / Loop with a ChatGPT browser adapter: [long-task continuation](extensions/chat-continuation/README.md).
+
 Headless ChatGPT MCP backend configured through TOML files. **Exactly two backend executables**:
 
 - **`webcodex-server`** — MCP, authentication, task lifecycle, and embedded OpenAI Tunnel.

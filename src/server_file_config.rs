@@ -36,17 +36,26 @@ fn default_data() -> PathBuf {
     PathBuf::from("./data")
 }
 
+/// 官方隧道的启动配置；旧 Environment 与直接绑定互斥，凭据仅引用私有文件，不进入健康输出。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TunnelSection {
-    /// Either a legacy, explicitly provisioned Environment, or direct binding.
+    /// 旧 Environment 根目录；存在时不能同时填写直接绑定字段。
     environment_dir: Option<PathBuf>,
+    /// 直接绑定的本地标识；缺省 main，只接受有界 ASCII 名称。
     profile_id: Option<String>,
+    /// 官方控制面的固定 tunnel_ 身份，不能用于选择本地 MCP 账户。
     tunnel_id: Option<String>,
+    /// 官方控制面密钥的受保护绝对路径，与本地 MCP 凭据分开。
     api_key_file: Option<PathBuf>,
+    /// 本地 MCP 账户 PAT 的私有绝对路径；缺省沿用 Server token，但原生续跑要求账户 PAT。
+    local_token_file: Option<PathBuf>,
+    /// 默认随 Server 启动隧道；false 仅保留配置。
     #[serde(default = "enabled_by_default")]
     autostart: bool,
+    /// 直接位于 Server 数据目录的健康文件；缺省由 profile_id 生成。
     readiness_path: Option<PathBuf>,
+    /// 可选受保护代理地址，只用于控制面网络，不写入状态或日志。
     proxy: Option<String>,
 }
 fn enabled_by_default() -> bool {
@@ -108,6 +117,11 @@ fn valid_path(path: &Path) -> bool {
             .any(|part| matches!(part, std::path::Component::ParentDir))
 }
 
+/// 校验启动身份、路径和传输设置；不修改环境或绑定网络。
+/// # 参数
+/// - `config`：已解析的 Server TOML，只借用并读取其引用的受保护凭据文件。
+/// # Errors
+/// 不完整、越界或不安全的配置返回固定说明，失败不启用任何配置。
 fn validate(config: &FileConfig) -> Result<(), String> {
     let addr = config
         .server
@@ -148,9 +162,10 @@ fn validate(config: &FileConfig) -> Result<(), String> {
         }
     }
     if let Some(tunnel) = &config.tunnel {
-        if tunnel.environment_dir.is_some() {
+        if let Some(environment) = &tunnel.environment_dir {
             if tunnel.tunnel_id.is_some()
                 || tunnel.api_key_file.is_some()
+                || tunnel.local_token_file.is_some()
                 || tunnel.profile_id.is_some()
                 || tunnel.proxy.is_some()
                 || tunnel.readiness_path.is_some()
@@ -159,7 +174,7 @@ fn validate(config: &FileConfig) -> Result<(), String> {
                     "tunnel.environment_dir cannot be mixed with a direct Tunnel binding".into(),
                 );
             }
-            if !valid_path(tunnel.environment_dir.as_ref().unwrap()) {
+            if !valid_path(environment) {
                 return Err("tunnel.environment_dir must be absolute".into());
             }
         } else {
@@ -189,6 +204,9 @@ fn validate(config: &FileConfig) -> Result<(), String> {
                 .as_deref()
                 .ok_or("tunnel.api_key_file is required")?;
             read_private_secret(api_file)?;
+            if let Some(path) = &tunnel.local_token_file {
+                read_private_secret(path)?;
+            }
             if let Some(path) = &tunnel.readiness_path {
                 if !valid_path(path) || path.parent() != Some(config.server.data_dir.as_path()) {
                     return Err(
@@ -210,6 +228,7 @@ fn validate(config: &FileConfig) -> Result<(), String> {
             }
         }
     }
+    // 这些身份和传输选项只能由显式 TOML 字段设置，不能通过通用 options 覆盖。
     const RESERVED: &[&str] = &[
         "WEBCODEX_SERVER_CONFIG",
         "WEBCODEX_ENV_FILE",
@@ -265,8 +284,9 @@ pub(crate) fn validate_selected() -> Result<(), String> {
     }
 }
 
-/// TOML is authoritative when selected; legacy EnvironmentFile loading is
-/// retained only for deployments without a TOML configuration.
+/// 应用显式 TOML 的启动身份和环境选项；身份与传输字段不从其他服务继承。
+/// # Errors
+/// 配置校验失败时在修改环境前返回错误；没有选定 TOML 则保留旧部署入口。
 pub(crate) fn prepare() -> Result<(), String> {
     let Some(path) = selected_config_path()? else {
         return Ok(());
@@ -315,8 +335,9 @@ pub(crate) fn prepare() -> Result<(), String> {
     Ok(())
 }
 
-/// New CLI-less direct OpenAI Tunnel binding, using the same isolated runtime
-/// supervisor, durable uncertain-state fence, and local MCP bearer as before.
+/// 从直接配置建立官方隧道，优先使用独立账户 PAT；缺省沿用 Server 凭据，不修改 Server bootstrap 身份。
+/// # Errors
+/// 配置或私有凭据无效时拒绝启动；不输出凭据，不建立网络或修改现有运行状态。
 pub(crate) fn direct_tunnel_profile(
 ) -> Result<Option<webcodex_environment::EmbeddedTunnelProfile>, String> {
     let Some(path) = selected_config_path()? else {
@@ -330,7 +351,11 @@ pub(crate) fn direct_tunnel_profile(
     if tunnel.environment_dir.is_some() {
         return Ok(None);
     }
-    let local = if let Some(path) = &config.server.token_file {
+    let local = if let Some(path) = tunnel
+        .local_token_file
+        .as_ref()
+        .or(config.server.token_file.as_ref())
+    {
         read_private_secret(path)?
     } else {
         return Err("embedded Tunnel requires a Server token_file".into());
@@ -370,6 +395,10 @@ pub(crate) fn direct_tunnel_profile(
         readiness_path,
     }))
 }
+
+#[cfg(test)]
+#[path = "../tests/chat-continuation/tunnel_config.rs"]
+mod continuation_tunnel_tests;
 
 /// Materialize the private Tunnel health observation only for the directly
 /// configured TOML profile. Never overwrite a saved observation at startup:

@@ -21,6 +21,9 @@ mod audit_http;
 mod auth;
 mod client_window;
 mod config;
+mod continuation_http;
+mod continuation_local_http;
+mod continuation_runtime;
 mod db;
 pub(crate) use webcodex_core::job_observation;
 mod job_receipts;
@@ -264,6 +267,12 @@ pub async fn run_server_with_parent_liveness(
 }
 
 #[doc(hidden)]
+/// 启动 Server 并与续跑维护、Tunnel 和服务停止信号共同退出。
+/// # 参数
+/// - `stop_on_stdin_eof`：仅受管理子进程使用 true，标准输入关闭时停止服务。
+/// - `service_stop`：服务管理器持有的停止 Future；结束后进入已有优雅停机流程。
+/// # Errors
+/// 配置、数据库、监听或服务失败向进程调用方返回错误；已提交的续跑状态保留供恢复。
 pub async fn run_server_with_shutdown(
     stop_on_stdin_eof: bool,
     service_stop: impl std::future::Future<Output = ()> + Send,
@@ -345,6 +354,7 @@ explicitly allow remote shared-key auth."
     let db = Database::open(&config.db_path())?;
     runner_bindings_file::provision_from_environment(&db).map_err(std::io::Error::other)?;
     let server_instance_guard = ServerInstanceGuard::acquire(&db)?;
+    let continuations = continuation_http::open(&config.data_dir).map_err(std::io::Error::other)?;
     db.recover_agent_wakes_for_server_takeover(
         &server_instance_guard,
         chrono::Utc::now().timestamp_millis(),
@@ -397,6 +407,7 @@ explicitly allow remote shared-key auth."
         tool_runtime::ToolRuntime::new(runner_registry.clone(), runtime_info.clone())
             .with_mcp_host_policy(mcp_host_policy)
             .with_model_workflow_policy(model_workflow_policy)
+            .with_chat_continuations(continuations.clone())
             .with_window_activity_database(db.clone())
             .with_memory_database(db.clone())
             .with_project_reference_database(db.clone())
@@ -481,6 +492,14 @@ explicitly allow remote shared-key auth."
 
     let authed_api_router = Router::new()
         .hoop(AuthMiddleware)
+        .push(
+            Router::with_path(route_metadata::api_path(RouteId::Continuations))
+                .post(continuation_http::control),
+        )
+        .push(
+            Router::with_path(route_metadata::api_path(RouteId::ContinuationLocalLease))
+                .post(continuation_local_http::lease),
+        )
         .push(
             Router::with_path(route_metadata::api_path(RouteId::CloudflareControl))
                 .post(cloudflare_ingress::cloudflare_control_handler),
@@ -686,6 +705,7 @@ explicitly allow remote shared-key auth."
         ))
         .hoop(affix_state::inject(config.clone()))
         .hoop(affix_state::inject(db.clone()))
+        .hoop(affix_state::inject(continuations.clone()))
         .hoop(affix_state::inject(authorize_session_store.clone()))
         .hoop(affix_state::inject(runner_registry.clone()))
         .hoop(affix_state::inject(tool_runtime.clone()))
@@ -838,14 +858,17 @@ explicitly allow remote shared-key auth."
         )
         .map_err(std::io::Error::other)?;
     }
-    server_shutdown::serve_until_termination(
-        Server::new(acceptor),
-        router,
-        shutdown_coordinator,
-        std::time::Duration::from_secs(SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_SECS),
-        stop_on_stdin_eof,
-        service_stop,
-        tunnels,
+    continuation_http::supervise(
+        continuations,
+        server_shutdown::serve_until_termination(
+            Server::new(acceptor),
+            router,
+            shutdown_coordinator,
+            std::time::Duration::from_secs(SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_SECS),
+            stop_on_stdin_eof,
+            service_stop,
+            tunnels,
+        ),
     )
     .await?;
     #[cfg(target_os = "macos")]

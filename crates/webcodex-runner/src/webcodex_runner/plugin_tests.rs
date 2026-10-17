@@ -194,6 +194,7 @@ fn runner_config(
         SkillsConfig, SshConfig, ToolProvidersConfig,
     };
     RunnerConfig {
+        continuation: Default::default(),
         server_url: "http://127.0.0.1:8000".to_string(),
         server_url_override: None,
         token: "test-token".to_string(),

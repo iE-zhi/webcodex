@@ -7,6 +7,8 @@
 
 不再提供独立 `webcodex` CLI、Desktop、Web Console 或纯展示类 MCP Apps。Computer 截图以及 Agent/Job 自动续跑所需的最小 MCP Host 载体仍然保留。
 
+Server 提供 Continue、Goal / Loop 的持久化调度和决策，浏览器执行端见[长任务续跑](extensions/chat-continuation/README.md)。
+
 ## 构建
 
 ```bash

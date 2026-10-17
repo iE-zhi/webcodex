@@ -17,7 +17,10 @@ fn validate_coding_project_source_shape(tool_name: &str, arguments: &Value) -> R
             .and_then(Value::as_str)
             .is_some_and(|value| value.trim().is_empty())
         {
-            return Err(coding_project_source_error(tool_name, &format!("{field} must not be empty")));
+            return Err(coding_project_source_error(
+                tool_name,
+                &format!("{field} must not be empty"),
+            ));
         }
     }
     if let Some(path) = arguments.get("path").and_then(Value::as_str) {
@@ -36,18 +39,27 @@ fn validate_coding_project_source_shape(tool_name: &str, arguments: &Value) -> R
         return if conflicts.is_empty() {
             Ok(())
         } else {
-            Err(coding_project_source_error(tool_name, &format!("conflicting fields project and {}", conflicts.join(", "))))
+            Err(coding_project_source_error(
+                tool_name,
+                &format!("conflicting fields project and {}", conflicts.join(", ")),
+            ))
         };
     }
     if path {
         return if client_id {
             Ok(())
         } else {
-            Err(coding_project_source_error(tool_name, "missing client_id required with path"))
+            Err(coding_project_source_error(
+                tool_name,
+                "missing client_id required with path",
+            ))
         };
     }
     if client_id {
-        return Err(coding_project_source_error(tool_name, "missing path required with client_id"));
+        return Err(coding_project_source_error(
+            tool_name,
+            "missing path required with client_id",
+        ));
     }
     // A Session is an exact continuation selector, not a worktree source or
     // permission to infer a current Project. The runtime authorizes its binding.
@@ -417,6 +429,7 @@ impl ToolCall {
             Self::StartSession { .. } => "start_session",
             Self::WorkOnProject { .. } => "work_on_project",
             Self::FinishCodingTask { .. } => "finish_coding_task",
+            Self::UpdateTaskContinuation { .. } => "update_task_continuation",
             Self::PresentDocx { .. } => "present_docx",
             Self::PresentPdf { .. } => "present_pdf",
             Self::ReadAppArtifactChunk { .. } => "read_app_artifact_chunk",
@@ -700,6 +713,7 @@ impl ToolCall {
             | Self::WorkspaceCheckpointRestore { session_id, .. }
             | Self::WorkspaceCheckpointDelete { session_id, .. } => session_id.as_deref(),
             Self::SessionHandoffSummary { session_id, .. }
+            | Self::UpdateTaskContinuation { session_id, .. }
             | Self::FinishCodingTask { session_id, .. } => Some(session_id.as_str()), // Window-card presentation/refresh never becomes generic Session recorder
             // evidence. An optional Session selector is association evidence only.
             Self::PresentWorkResult { .. }

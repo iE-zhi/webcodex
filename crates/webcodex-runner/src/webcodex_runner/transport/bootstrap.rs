@@ -158,6 +158,16 @@ pub(crate) fn run_runner(
         }
     };
     runtime.register_background_thread(shutdown_listener);
+    // 本机续跑使用自己的有界 agent 租约，线程与现有 Runner 关机协调器一起退出。
+    match crate::webcodex_runner::continuation::start(
+        cfg.clone(),
+        runner_instance_id.clone(),
+        runtime.shutdown_flag(),
+    ) {
+        Ok(Some(thread)) => runtime.register_background_thread(thread),
+        Ok(None) => {}
+        Err(error) => tracing::error!(code=%error, "local continuation unavailable"),
+    }
     #[cfg(windows)]
     if let Some(stop) = service_stop {
         match install_service_stop_listener(runtime.clone(), stop) {

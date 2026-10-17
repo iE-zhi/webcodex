@@ -64,6 +64,16 @@ fn task_outputs_schema() -> Value {
 
 pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
     match name {
+        "update_task_continuation" => Some(wrapped_output_schema(vec![
+            ("task_id", schema_type("string", "本次续跑任务 ID。")),
+            ("generation", schema_type("integer", "当前控制版本；旧版本不能继续。")),
+            ("sequence", schema_type("integer", "工作序号；重复序号表示同一已交出的工作，不得重做未知操作。")),
+            ("session_id", schema_type("string", "已授权的确切 Workflow Session。")),
+            ("released", schema_type("boolean", "true 才允许结束当前聊天回合。")),
+            ("waiting", schema_type("boolean", "正在等待实际工具或人工操作，不忙轮询。")),
+            ("control_token", nullable_schema("string", "本回合下一次检查的令牌，不转发给其他聊天或 worker；释放后为空。")),
+            ("instructions", schema_type("string", "当前原始请求的后续工作或明确停止说明。")),
+        ])),
         "work_on_project" => Some(work_on_project_output_schema()),
         "finish_coding_task" => Some(wrapped_output_schema(vec![
             ("acceptance", acceptance_evidence_schema()),

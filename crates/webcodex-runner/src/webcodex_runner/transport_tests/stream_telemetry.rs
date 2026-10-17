@@ -1,4 +1,3 @@
-
 #[test]
 fn runner_stream_telemetry_is_fail_open() {
     observe_runtime_metric_fail_open(|| panic!("synthetic metric sink failure"));
@@ -216,6 +215,7 @@ fn runner_stream_telemetry_concurrent_results_remain_distinct_on_one_stream_writ
 
 fn test_runner_config(server_url: String) -> RunnerConfig {
     RunnerConfig {
+        continuation: Default::default(),
         server_url,
         server_url_override: None,
         token: "test-token".to_string(),

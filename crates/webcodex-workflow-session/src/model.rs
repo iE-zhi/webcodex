@@ -610,36 +610,55 @@ pub struct SessionGuardDenial {
     pub guard: &'static str,
 }
 
+/// 一个真实工具调用的开始凭据；克隆共享生命周期，只能交回原 Store 或其克隆记录结束。
+/// 最后一个未完成凭据销毁会标记该调用结果未知；不序列化，不代表外部操作已取消或回滚。
 #[derive(Debug, Clone)]
 pub struct ToolCallStart {
+    /// 共享的进程内调用生命周期，跨线程安全，不进入事件序列化或工具输出。
+    pub(super) continuation_lifetime: std::sync::Arc<crate::continuation_activity::CallLifetime>,
+    /// 已写入的开始事件身份，结束事件使用新的事件 ID。
     pub event_id: String,
+    /// 同一真实调用的身份；开始、结束和取消观察都使用它。
     pub call_id: String,
-    /// Trusted correlation for one real kernel request across recorder/business
-    /// event pairs. It is accounting metadata only, never execution authority.
+    /// 内核提供的逻辑调用关联，仅供记账，None 表示没有关联，不授予执行权。
     pub logical_invocation_id: Option<String>,
+    /// 逻辑调用的记账角色，None 表示普通调用。
     pub logical_invocation_role: Option<String>,
+    /// 原 Store 已验证存在的所属 Session，不允许改为另一 Session 后结束。
     pub session_id: String,
+    /// 真实入口传输类型，随结束事件保存。
     pub transport: SessionTransport,
+    /// 规范工具名，不保存用户输入正文。
     pub tool_name: String,
+    /// 调用声明的项目，None 表示未指定。
     pub project: Option<String>,
+    /// 运行时实际解析的项目，None 表示无需项目。
     pub resolved_project: Option<String>,
+    /// 工具契约中的风险分类，用于事件记账。
     pub risk_class: String,
+    /// 契约是否声明读取行为，不能替代实际权限检查。
     pub read_like: bool,
+    /// 契约是否声明写入行为，用于状态和证据投影。
     pub write_like: bool,
+    /// 契约是否声明 Shell 行为。
     pub shell_like: bool,
+    /// 契约是否声明 Git 行为。
     pub git_like: bool,
+    /// 契约是否产出变更摘要证据。
     pub change_summary_like: bool,
-    /// Safe boolean metadata: true when this call contributes to
-    /// `review_evidence.diff_review_count` (git diff tools, or
-    /// `read_workspace_changes(include_diff=true)`). Never stores raw input or diffs.
+    /// 成功时是否贡献 diff 审阅计数；只存布尔值，不存原始差异。
     pub diff_review_like: bool,
+    /// 契约提取的变更路径，用于结束事件，不代表写入已经成功。
     pub changed_paths: Vec<String>,
-    /// Validated project-relative paths that the call may establish as
-    /// exploration evidence if and only if it finishes successfully.
+    /// 校验过的项目相对路径，仅成功结束后可成为探索证据。
     pub observed_paths: Vec<String>,
+    /// 开始的墙上时间，沿 SessionEvent 的 Unix 秒单位。
     pub started_at: i64,
+    /// 开始的单调时刻，只在本进程计算耗时，不序列化。
     pub started_instant: Instant,
+    /// 已有的权限决定，None 表示没有附带决定，不代表允许。
     pub permission: Option<PermissionDecision>,
+    /// 记录时声明的结果断言，结束时与实际结果比较。
     pub expectation: ToolCallExpectation,
 }
 

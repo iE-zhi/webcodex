@@ -14,3 +14,11 @@ allow_cwd_anywhere = false
 allow_raw_shell = true
 max_timeout_secs = 3600
 max_output_bytes = 262144
+
+# Requires a Windows/Linux login-session Runner and an explicitly selected Runner in the extension.
+[continuation]
+enabled = false
+# Use an installed Chrome/Edge absolute path and the profile containing the extension and ChatGPT login.
+# browser_path = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+# browser_path = "/usr/bin/google-chrome"
+# browser_profile = "Default"

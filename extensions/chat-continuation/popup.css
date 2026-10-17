@@ -1,0 +1,48 @@
+:root { color-scheme: light dark; --bg: #f8fafb; --surface: #fff; --ink: #192330; --muted: #536475; --line: #d4dde5; --accent: #1459b4; --error: #a91e24; --success: #187044; }
+@media (prefers-color-scheme: dark) { :root { --bg: #151b23; --surface: #202a36; --ink: #ecf2f8; --muted: #b0becd; --line: #425064; --accent: #397fe0; --error: #ffb4b4; } }
+* { box-sizing: border-box; }
+/* 扩展弹窗按文档宽度计算视口；固定根宽度避免 vw 与首次布局相互收缩。 */
+html { width: 400px; }
+body { width: 100%; margin: 0; padding: 18px; color: var(--ink); background: var(--bg); font: 14px/1.5 system-ui, "Microsoft YaHei", sans-serif; }
+header, .row, .actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+h1 { font-size: 18px; margin: 0; font-weight: 650; }
+p { margin: 12px 0; overflow-wrap: anywhere; }
+#status { color: var(--muted); min-height: 21px; }
+#error { color: var(--error); }
+#connectionStatus { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+#connectionStatus[data-state="connected"] { color: var(--success); }
+#connectionStatus[data-state="failed"] { color: var(--error); }
+label { display: block; font-weight: 550; }
+textarea, select, input, button { font: inherit; border-radius: 7px; border: 1px solid var(--line); }
+textarea, select, input { color: var(--ink); background: var(--surface); padding: 8px; min-width: 0; }
+textarea { width: 100%; resize: vertical; max-height: 220px; margin: 7px 0 12px; }
+.row { padding: 9px 0; border-bottom: 1px solid var(--line); }
+.row input { width: 78px; text-align: right; }
+.row select { max-width: 205px; }
+.hint { color: var(--muted); font-size: 12px; }
+button { cursor: pointer; padding: 9px 12px; color: #fff; background: var(--accent); border-color: transparent; transition: filter 120ms ease; }
+button:hover:enabled { filter: brightness(1.12); }
+button:disabled { opacity: .48; cursor: default; }
+button.secondary, button.quiet { color: var(--ink); background: var(--surface); border-color: var(--line); }
+button.quiet { padding: 5px 9px; font-size: 12px; }
+:is(button, textarea, select, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+footer { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+#continue { width: 100%; margin: 0 0 18px; }
+details { margin: 0 0 18px; }
+summary { cursor: pointer; color: var(--muted); }
+#connectionForm input { width: 100%; margin: 6px 0 12px; }
+#tokenHint { margin: -5px 0 12px; }
+#connect { width: 100%; }
+footer .actions { margin-top: 7px; }
+#tasks { flex: 1; width: 230px; }
+@media (max-width: 320px) { body { padding: 12px; } .row { align-items: stretch; flex-direction: column; gap: 6px; } .row input, .row select { width: 100%; max-width: 100%; } }
+/* 独立页面在手机屏幕中可收缩；桌面弹窗宽度不跟随其初始小视口。 */
+@media (max-device-width: 400px) { html { width: 100vw; } }
+@media (prefers-color-scheme: dark) { :root { --success: #83d7a8; } }
+@media (prefers-reduced-motion: reduce) { button { transition: none; } }
+
+/* 复用现有分组表单；Session 输入不超过弹窗可用宽度。 */
+#sessionId { width: 100%; margin-top: 6px; }
+.row input[type="checkbox"] { width: auto; }
+/* 队列复用原生选择器；长正文只作为选项显示，不能撑宽窄面板。 */
+#queueKind, #queueEntries { width: 100%; margin: 6px 0 12px; }

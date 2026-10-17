@@ -6,6 +6,33 @@
     deny_unknown_fields
 )]
 pub enum ToolCall {
+    /// 当前主聊天的原生续跑；随机令牌由已授权消息发行，不增加项目或工具权限。
+    UpdateTaskContinuation {
+        /// 本任务的其他项目/子任务 Workflow Session，最多十五个；不能遗漏仍在执行的依赖。
+        #[serde(default)]
+        #[schemars(length(max = 15))]
+        related_session_ids: Vec<String>,
+        /// 指令中的任务 UUID。
+        task_id: String,
+        /// 指令中的控制版本。
+        generation: u64,
+        /// 只供当前主聊天使用的六十四位十六进制令牌，不传给 worker。
+        #[schemars(length(min = 64, max = 64))]
+        control_token: String,
+        /// 当前任务的已授权 Session；未知时先正常 start_session，无需用户手填。
+        session_id: String,
+        /// bind 或 finish。
+        action: String,
+        /// 同一逻辑检查重试保持不变的名称，只允许 ASCII 字母、数字、下划线和连字符，最多一百二十八字节。
+        #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+        request_id: String,
+        /// finish 使用 continue、complete 或 blocked，bind 省略。
+        #[serde(default)]
+        decision: String,
+        /// 当前 ChatGPT 的公开进度、规划或完成依据，最多 128 KiB，不含私有推理。
+        #[serde(default)]
+        summary: String,
+    },
     /// List registered tool runtime tools.
     ListTools {
         /// Optional read_tool_manifest category filter such as artifact, edit, session, git, or runtime.

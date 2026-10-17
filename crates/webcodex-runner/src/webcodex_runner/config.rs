@@ -62,6 +62,9 @@ pub(crate) struct SkillsConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct RunnerConfig {
+    /// 启动时读取的本机续跑配置，默认关闭；不属于热更新可执行配置。
+    #[serde(default)]
+    pub(crate) continuation: super::continuation::ContinuationConfig,
     pub(crate) server_url: String,
     /// Process-only CLI precedence; never deserialized from runner.toml.
     #[serde(skip)]
@@ -1122,6 +1125,7 @@ pub(crate) fn restart_required_fields(
         }};
     }
     classify!(
+        continuation,
         capabilities,
         client_id,
         display_name,
@@ -1662,6 +1666,7 @@ pub(crate) fn load_config_with_server_url(
         return Err("websocket_connect_timeout_secs must be > 0".to_string());
     }
     validate_max_concurrent_jobs(cfg.max_concurrent_jobs)?;
+    cfg.continuation.validate()?;
     validate_skills_config(&cfg.skills)?;
     validate_instructions_config(&cfg.instructions)?;
     if let Some(host_context) = cfg.host_context.take() {

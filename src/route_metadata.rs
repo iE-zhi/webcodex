@@ -69,6 +69,7 @@ pub(crate) enum AuditClass {
     Shell,
 }
 
+/// 固定的 HTTP 路由身份；仅用于不可变元数据与认证策略查找，不保存运行状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum RouteId {
     WellKnownProtectedResource,
@@ -91,6 +92,10 @@ pub(crate) enum RouteId {
     AdminProjectsUnregister,
     ToolsList,
     ToolsCall,
+    /// 本账户长任务控制，不能调用文件、Shell 或扩大工具权限。
+    Continuations,
+    /// 当前 Runner 进程的短时防休眠/浏览器恢复租约，不提供工具或消息发送权限。
+    ContinuationLocalLease,
 
     ProjectsResolveOrRegister,
     RuntimeStatus,
