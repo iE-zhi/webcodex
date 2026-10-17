@@ -118,26 +118,12 @@ def _require_exact_clean_root(root: Path, source_sha: str) -> None:
 
 
 def _package_versions(root: Path) -> dict[str, str]:
+    """Read the canonical Rust workspace version for two backend executables."""
     try:
         cargo = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
-        cargo_version = cargo["workspace"]["package"]["version"]
-        npm = json.loads((root / "npm/webcodex/package.json").read_text(encoding="utf-8"))
-        npm_version = npm["version"]
-        desktop_package = json.loads((root / "apps/desktop/package.json").read_text(encoding="utf-8"))
-        desktop_package_version = desktop_package["version"]
-        desktop_cargo = tomllib.loads((root / "apps/desktop/src-tauri/Cargo.toml").read_text(encoding="utf-8"))
-        desktop_cargo_version = desktop_cargo["package"]["version"]
-        desktop_tauri = json.loads((root / "apps/desktop/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
-        desktop_tauri_version = desktop_tauri["version"]
+        versions = {"cargo": cargo["workspace"]["package"]["version"]}
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
         raise PublicationError("could not read canonical release versions") from exc
-    versions = {
-        "cargo": cargo_version,
-        "npm": npm_version,
-        "desktop_package": desktop_package_version,
-        "desktop_cargo": desktop_cargo_version,
-        "desktop_tauri": desktop_tauri_version,
-    }
     if any(not isinstance(value, str) for value in versions.values()):
         raise PublicationError("canonical release versions are invalid")
     return versions
@@ -436,12 +422,15 @@ def reclaim_prepublication_tag(
     if release is not None:
         raise PublicationError(f"GitHub Release exists; refusing to reclaim {tag}")
 
-    encoded_package = urllib.parse.quote(PACKAGE, safe="")
-    npm_metadata = _fetch_public_json_optional(
-        f"{NPM_REGISTRY}{encoded_package}/{urllib.parse.quote(release_version, safe='')}", timeout
-    )
-    if npm_metadata is not None:
-        raise PublicationError(f"npm package version exists; refusing to reclaim {PACKAGE}@{release_version}")
+    if tuple(map(int, release_version.split("-", 1)[0].split("+", 1)[0].split("."))) < (0, 5, 0):
+        # Historical tagged versions used an npm CLI; do not reclaim those
+        # tags while the corresponding npm package remains published.
+        encoded_package = urllib.parse.quote(PACKAGE, safe="")
+        npm_metadata = _fetch_public_json_optional(
+            f"{NPM_REGISTRY}{encoded_package}/{urllib.parse.quote(release_version, safe='')}", timeout
+        )
+        if npm_metadata is not None:
+            raise PublicationError(f"legacy npm package exists: {PACKAGE}@{release_version}")
 
     history = _reclaim_build_history(repo=repo, tag=tag, timeout=timeout)
     active = [run for run in history if run["status"] != "completed"]
@@ -513,22 +502,10 @@ def preflight_release(
     if _github_optional_json(client, f"/releases/tags/{encoded_tag}") is not None:
         raise PublicationError(f"GitHub Release already exists: {tag}")
 
-    encoded_package = urllib.parse.quote(PACKAGE, safe="")
-    npm_metadata = _fetch_public_json_optional(
-        f"{NPM_REGISTRY}{encoded_package}/{urllib.parse.quote(release_version, safe='')}",
-        timeout,
-    )
-    if npm_metadata is not None:
-        raise PublicationError(f"npm package version already exists: {PACKAGE}@{release_version}")
 
     github_user = client.fetch_authenticated_user().get("login")
     if not isinstance(github_user, str) or not github_user:
         raise PublicationError("GitHub publication identity is unavailable")
-    npm_user = _run_capture(
-        ["npm", "whoami", "--registry", NPM_REGISTRY], timeout=min(timeout, 30.0)
-    )
-    if not npm_user or any(ch.isspace() for ch in npm_user):
-        raise PublicationError("npm publication identity is unavailable")
 
     return {
         "version": release_version,
@@ -537,10 +514,8 @@ def preflight_release(
         "source_sha": source,
         "github_source_ref_sha": source_ref_sha,
         "github_user": github_user,
-        "npm_user": npm_user,
         "tag_available": True,
         "github_release_available": True,
-        "npm_version_available": True,
     }
 
 
@@ -973,63 +948,6 @@ def _extract_linux_x64_binaries(bundle_dir: Path, summary: dict, destination: Pa
         raise PublicationError("could not extract linux-x64 release binaries") from exc
     if seen != expected:
         raise PublicationError("linux-x64 release archive is missing binaries")
-
-
-def stage_npm(
-    *,
-    repo: str,
-    bundle_dir: Path,
-    source_root: Path,
-    output_dir: Path,
-    require_unified_installers: bool = False,
-    require_runtime_installers: bool = False,
-) -> dict:
-    bundle = bundle_dir.absolute()
-    source = source_root.absolute()
-    destination = output_dir.absolute()
-    summary = verify_bundle(bundle, repo, require_unified_installers=require_unified_installers, require_runtime_installers=require_runtime_installers)
-    if summary.get("build_kind") != "release":
-        raise PublicationError("npm staging requires a real release bundle")
-    _require_exact_clean_root(source, str(summary["source_sha"]))
-    tag_commit = _git(source, "rev-parse", f"{summary['tag']}^{{commit}}")
-    if tag_commit != summary["source_sha"]:
-        raise PublicationError("source worktree tag does not match bundle source")
-    if destination.exists() or destination.is_symlink():
-        raise PublicationError(f"npm staging output already exists: {destination}")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-
-    _run_checked(
-        [
-            "bash",
-            str(source / "scripts/stage_npm_release.sh"),
-            "--manifest",
-            str(bundle / "manifest.json"),
-            "--output-dir",
-            str(destination),
-        ],
-        cwd=source,
-    )
-    with tempfile.TemporaryDirectory(prefix="webcodex-release-binaries-") as temp:
-        binaries = Path(temp) / "bin"
-        _extract_linux_x64_binaries(bundle, summary, binaries)
-        _run_checked(
-            [
-                "bash",
-                str(source / "scripts/npm_package_smoke.sh"),
-                "--package-dir",
-                str(destination / "npm-package"),
-                "--binary-dir",
-                str(binaries),
-            ],
-            cwd=source,
-            timeout=900.0,
-        )
-    return {
-        **summary,
-        "source_root": str(source),
-        "stage_dir": str(destination / "npm-package"),
-        "npm_smoke": "passed",
-    }
 
 
 def _github_asset_digest(asset: dict) -> str:

@@ -34,7 +34,6 @@ fn legacy_paths(name: &str) -> (tempfile::TempDir, ProjectPaths) {
         profile: "personal".to_string(),
         state_dir: Some(state),
         json: false,
-        console_assets_dir: None,
     };
     let (_, paths) = ProjectConfig::resolve(&options).unwrap();
     fs::create_dir_all(&paths.data).unwrap();

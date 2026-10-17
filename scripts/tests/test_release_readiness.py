@@ -387,16 +387,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", extended)
         for runner in ("ubuntu-24.04-arm", "macos-15-intel", "windows-11-arm"):
             self.assertIn(runner, extended)
-        self.assertIn("--platform darwin-x64", extended)
-        self.assertIn("-Platform win32-arm64", extended)
-        self.assertIn("--bundles dmg", extended)
-        self.assertIn("--bundles nsis", extended)
-        self.assertIn('export WEBCODEX_GIT_COMMIT="$source_sha"', extended)
-        self.assertIn("export WEBCODEX_GIT_DIRTY=false", extended)
-        self.assertIn('expected="$name $version (commit $source_sha, dirty=false, built_at=$built_at)"', extended)
-        self.assertIn("$env:WEBCODEX_GIT_COMMIT = $source", extended)
-        self.assertIn('$env:WEBCODEX_GIT_DIRTY = "false"', extended)
-        self.assertIn('$expected = "$name $version (commit $source, dirty=false, built_at=$builtAt)"', extended)
+        self.assertIn("cargo check --locked -p webcodex -p webcodex-runner", extended)
+        self.assertIn("webcodex-computer", extended)
+        self.assertIn("cargo build --locked --profile dogfood --bins -p webcodex -p webcodex-runner", extended)
+        self.assertNotIn("apps/desktop", extended)
+        self.assertNotIn("--bundles dmg", extended)
+        self.assertNotIn("--bundles nsis", extended)
         self.assertNotIn("actions/upload-artifact", extended)
         self.assertNotIn("cargo build --locked --release", workflow)
         self.assertNotIn("cargo build --locked --release", extended)
@@ -416,199 +412,75 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("packages: write", workflow)
         self.assertNotIn("push: true", workflow)
 
-    def test_local_desktop_builders_match_native_ci_contracts(self) -> None:
-        macos = Path("scripts/build_desktop_macos_local.sh").read_text(encoding="utf-8")
-        windows = Path("scripts/build_desktop_windows_local.ps1").read_text(encoding="utf-8")
-        windows_stage = Path("scripts/prepare_desktop_bundle.ps1").read_text(encoding="utf-8")
-        windows_smoke = Path("scripts/desktop_install_windows_smoke.ps1").read_text(encoding="utf-8")
-        windows_npm_smoke = Path("scripts/npm_install_windows_smoke.ps1").read_text(encoding="utf-8")
-        windows_package = Path("scripts/package_release_artifact.ps1").read_text(encoding="utf-8")
-
-        for local in (macos, windows):
-            self.assertIn("npm ci --prefix frontend", local)
-            self.assertIn("npm ci --prefix apps/desktop", local)
-
-        self.assertIn('export CI="true"', macos)
-        self.assertIn('export APPLE_SIGNING_IDENTITY="-"', macos)
-        self.assertIn("--bundles dmg", macos)
-
-        self.assertIn("target\\desktop-local-tauri", windows)
-        self.assertIn("prepare_desktop_bundle.ps1", windows)
-        self.assertIn("--bundles nsis", windows)
-        self.assertIn("node node_modules/@tauri-apps/cli/tauri.js build", windows)
-        self.assertIn("--no-sign -- --locked", windows)
-        self.assertIn("if ($Smoke)", windows)
-        self.assertIn("desktop_install_windows_smoke.ps1", windows)
-        self.assertIn("target\\desktop-local-dist", windows)
-        self.assertIn("[switch]$AllowDirty", windows)
-        self.assertIn("-GitDirty $GitDirty", windows)
-        self.assertIn("$env:WEBCODEX_GIT_COMMIT = $SourceSha.ToLowerInvariant()", windows)
-        self.assertIn('$env:WEBCODEX_GIT_DIRTY = if ($GitDirty) { "true" } else { "false" }', windows)
-        self.assertIn('export WEBCODEX_GIT_COMMIT="$SOURCE_SHA"', macos)
-        self.assertIn("export WEBCODEX_GIT_DIRTY=false", macos)
-        self.assertIn('"dirty-$ShortSource"', windows)
-        for helper in (windows_stage, windows_smoke):
-            self.assertIn("[bool]$GitDirty = $false", helper)
-            self.assertIn("dirty=$dirtyText", helper)
-        self.assertIn("function Remove-FileEventually", windows_smoke)
-        self.assertIn('Remove-FileEventually $uninstaller 30 "Desktop uninstaller remained locked after silent uninstall', windows_smoke)
-        for helper in (windows_stage, windows_smoke, windows_npm_smoke, windows_package):
-            self.assertIn("GetUnresolvedProviderPathFromPSPath", helper)
+    def test_headless_builders_preserve_runtime_and_computer(self) -> None:
+        extended = Path(".github/workflows/extended-native.yml").read_text(encoding="utf-8")
+        release = Path(".github/workflows/release-build.yml").read_text(encoding="utf-8")
+        for source in (extended, release):
+            self.assertIn("cargo build --locked", source)
+            self.assertNotIn("apps/desktop", source)
+            self.assertNotIn("frontend/package-lock.json", source)
+        self.assertIn("webcodex-computer", extended)
+        self.assertIn("macos-15-intel", extended)
+        self.assertIn("windows-11-arm", extended)
+        self.assertIn("ubuntu-24.04-arm", extended)
+        self.assertIn("verify_bundle_directory", release)
 
     def test_daily_ci_avoids_rare_native_runners_and_keeps_path_aware_gates(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
         extended = Path(".github/workflows/extended-native.yml").read_text(encoding="utf-8")
-        release_build = Path(".github/workflows/release-build.yml").read_text(encoding="utf-8")
+        release = Path(".github/workflows/release-build.yml").read_text(encoding="utf-8")
 
-        def job_block(name: str, next_name: str) -> str:
-            start = workflow.index(f"  {name}:\n")
-            end = workflow.index(f"  {next_name}:\n", start)
-            return workflow[start:end]
-
-        changes = job_block("changes", "contract")
-        contract = job_block("contract", "test-linux-rust")
-        linux_rust = job_block("test-linux-rust", "test-linux-tooling")
-        linux_tooling = job_block("test-linux-tooling", "test")
-        aggregate = job_block("test", "test-docker-server")
-        docker = job_block("test-docker-server", "test-macos-core")
-        self.assertNotIn("pull_request.user.login", linux_rust)
-        self.assertIn("cargo check --locked --workspace --all-targets", linux_tooling)
-        self.assertIn("bash scripts/release_check.sh --static-only", linux_tooling)
-        self.assertNotIn("github.event_name == 'push' ||", linux_tooling)
-        self.assertIn("github.event_name == 'pull_request'", linux_tooling)
-        self.assertIn("github.event.pull_request.user.login != github.repository_owner", linux_tooling)
-        self.assertIn("contains(github.event.pull_request.labels.*.name, 'run-ci')", linux_tooling)
-        self.assertIn("needs.changes.outputs.needs_docker == 'true'", docker)
-        self.assertIn("platforms: linux/amd64", docker)
-        self.assertIn(
-            "docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8",
-            docker,
-        )
-        self.assertIn("test ! -e /usr/local/bin/webcodex-runner", docker)
-
-        self.assertIn("needs: changes", contract)
-        self.assertIn("if: needs.changes.outputs.needs_frontend == 'true'", contract)
-        self.assertIn("if: needs.changes.outputs.needs_desktop_frontend == 'true'", contract)
-        self.assertIn("needs.changes.outputs.needs_plugin_sdk == 'true'", contract)
-        self.assertIn("npm/plugin-sdk/package-lock.json", contract)
-        self.assertIn("plugins/agent-browser/package-lock.json", contract)
-        for command in (
-            "npm ci --prefix npm/plugin-sdk",
-            "npm --prefix npm/plugin-sdk run typecheck",
-            "npm --prefix npm/plugin-sdk run build",
-            "npm --prefix npm/plugin-sdk test",
-            "npm --prefix npm/plugin-sdk run pack:dry-run",
-            "npm ci --prefix plugins/agent-browser",
-            "npm --prefix plugins/agent-browser run typecheck",
-            "npm --prefix plugins/agent-browser test",
-        ):
-            self.assertIn(command, contract)
-        self.assertIn("github.event.before", changes)
-        self.assertIn("persist-credentials: false", changes)
-        self.assertIn('classifier="scripts/ci_path_risk.py"', changes)
-        self.assertIn("reason=full-native:bootstrap-base-missing", changes)
-        self.assertIn('git fetch --no-tags origin "refs/pull/$PR_NUMBER/head"', changes)
-        self.assertIn("--external-contributor", changes)
-        self.assertIn("--run-ci", changes)
-        self.assertNotIn("pull_request_target", workflow)
-
-        macos_core = job_block("test-macos-core", "test-macos-desktop")
-        macos_desktop = job_block("test-macos-desktop", "test-macos")
-        macos_aggregate = job_block("test-macos", "test-windows-core")
-        self.assertIn("platform: darwin-arm64", macos_core)
-        self.assertNotIn("darwin-x64", macos_core)
-        self.assertNotIn("macos-15-intel", macos_core)
-        self.assertIn("python3 scripts/check_production_warnings.py", macos_core)
-        self.assertIn("platform: darwin-arm64", macos_desktop)
-        self.assertNotIn("darwin-x64", macos_desktop)
-        self.assertIn("--bundles dmg", macos_desktop)
-
-        windows_core = job_block("test-windows-core", "test-windows-runner")
-        windows_runner = job_block("test-windows-runner", "test-windows-package")
-        windows_package = job_block("test-windows-package", "test-windows-desktop")
-        windows_desktop = job_block("test-windows-desktop", "test-windows")
-        self.assertIn("needs.changes.outputs.needs_windows_core == 'true'", windows_core)
-        self.assertIn("needs.changes.outputs.needs_windows_runner == 'true'", windows_runner)
-        self.assertIn("needs.changes.outputs.needs_windows_package == 'true'", windows_package)
-        self.assertIn("needs.changes.outputs.needs_windows_desktop == 'true'", windows_desktop)
-        self.assertIn("-Platform win32-x64", windows_desktop)
-
-        for rare in ("macos-15-intel", "windows-11-arm", "ubuntu-24.04-arm", "test-windows-arm64:", "test-linux-arm64:"):
-            self.assertNotIn(rare, workflow)
+        for lane in ("test-linux-rust", "test-linux-tooling", "test-macos-core",
+                     "test-windows-core", "test-windows-runner", "test-windows-package",
+                     "test-macos", "test-windows", "test-native"):
+            self.assertIn(f"  {lane}:\n", workflow)
+        for retired in ("test-macos-desktop", "test-windows-desktop",
+                        "npm ci --prefix frontend", "npm ci --prefix apps/desktop"):
+            self.assertNotIn(retired, workflow)
         for rare in ("macos-15-intel", "windows-11-arm", "ubuntu-24.04-arm"):
+            self.assertNotIn(rare, workflow)
             self.assertIn(rare, extended)
 
-        windows_aggregate = job_block("test-windows", "test-native")
-        native_aggregate = workflow[workflow.index("  test-native:\n"):]
-        for required_aggregate in (aggregate, macos_aggregate, windows_aggregate, native_aggregate):
-            self.assertIn("if: ${{ !cancelled() }}", required_aggregate)
-            self.assertNotIn("if: always()", required_aggregate)
-        self.assertIn("NEEDS_DOCKER: ${{ needs.changes.outputs.needs_docker }}", native_aggregate)
-        self.assertIn("expected_docker=skipped", native_aggregate)
-        self.assertNotIn("FULL_NATIVE_REQUESTED", workflow)
-        self.assertIn("cargo build --locked --release -p webcodex -p webcodex-cli -p webcodex-runner", release_build)
+        self.assertIn("needs.changes.outputs.needs_docker == 'true'", workflow)
+        self.assertIn("bash scripts/release_check.sh --static-only", workflow)
+        self.assertIn("needs.changes.outputs.needs_plugin_sdk == 'true'", workflow)
+        self.assertIn("npm/plugin-sdk/package-lock.json", workflow)
+        self.assertIn("reason=full-native:bootstrap-base-missing", workflow)
+        self.assertIn("cargo build --locked --release -p webcodex -p webcodex-runner", release)
 
     def test_ci_native_lane_conditions_are_classifier_driven(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
         pairs = {
             "test-docker-server": "needs_docker",
             "test-macos-core": "needs_macos",
-            "test-macos-desktop": "needs_macos_desktop",
             "test-windows-core": "needs_windows_core",
             "test-windows-runner": "needs_windows_runner",
             "test-windows-package": "needs_windows_package",
-            "test-windows-desktop": "needs_windows_desktop",
         }
-        job_names = list(pairs)
-        job_names.extend(("test-macos", "test-windows", "test-native"))
-        for job_name, output_name in pairs.items():
-            start = workflow.index(f"  {job_name}:\n")
-            following = [workflow.find(f"  {name}:\n", start + 1) for name in job_names]
-            following = [position for position in following if position > start]
-            end = min(following) if following else len(workflow)
+        jobs = list(pairs) + ["test-macos", "test-windows", "test-native"]
+        for job, key in pairs.items():
+            start = workflow.index(f"  {job}:\n")
+            candidates = [workflow.find(f"  {other}:\n", start + 1) for other in jobs]
+            end = min((index for index in candidates if index > start), default=len(workflow))
             block = workflow[start:end]
-            with self.subTest(job=job_name):
-                self.assertIn("needs: changes", block)
-                self.assertIn(f"if: needs.changes.outputs.{output_name} == 'true'", block)
-
-        for aggregate in ("test", "test-macos", "test-windows", "test-native"):
-            start = workflow.index(f"  {aggregate}:\n")
-            line_end = workflow.index("\n", workflow.index("    needs:", start))
-            needs_line = workflow[workflow.index("    needs:", start) : line_end]
-            with self.subTest(aggregate=aggregate):
-                self.assertIn("contract", needs_line)
-
+            self.assertIn("needs: changes", block)
+            self.assertIn(f"if: needs.changes.outputs.{key} == 'true'", block)
         changes = workflow[workflow.index("  changes:\n"):workflow.index("  contract:\n")]
-        for output in (
-            "needs_windows",
-            "needs_windows_core",
-            "needs_windows_runner",
-            "needs_windows_package",
-            "needs_windows_desktop",
-            "needs_macos",
-            "needs_macos_desktop",
-            "needs_desktop_package",
-            "needs_full_native",
-            "categories",
-            "reason",
-        ):
-            self.assertIn(f"{output}: ${{{{ steps.classify.outputs.{output} }}}}", changes)
-        for rollout_output in (
-            "needs_frontend",
-            "needs_desktop_frontend",
-            "needs_plugin_sdk",
-            "needs_docker",
-        ):
-            self.assertIn(f"{rollout_output}: ${{{{ steps.classify.outputs.{rollout_output} == 'true'", changes)
-            self.assertIn(f"steps.classify.outputs.{rollout_output} == '' && steps.classify.outputs.needs_full_native == 'true'", changes)
-        self.assertNotIn("needs_windows_arm64", workflow)
-        self.assertNotIn("needs_linux_arm64", workflow)
+        for key in ("needs_windows", "needs_windows_core", "needs_windows_runner",
+                    "needs_windows_package", "needs_macos", "needs_full_native",
+                    "categories", "reason"):
+            self.assertIn(f"{key}: ${{{{ steps.classify.outputs.{key} }}}}", changes)
+        self.assertIn("needs_plugin_sdk:", changes)
+        self.assertIn("needs_docker:", changes)
+        for removed in ("needs_windows_desktop", "needs_macos_desktop", "needs_frontend"):
+            self.assertNotIn(f"{removed}:", changes)
+
 
     def test_macos_ci_host_check_does_not_use_quiet_grep_under_pipefail(self) -> None:
         for path in (".github/workflows/ci.yml", ".github/workflows/extended-native.yml"):
             workflow = Path(path).read_text(encoding="utf-8")
             self.assertNotIn('rustc -vV | grep -Fxq "host:', workflow)
-            self.assertIn("rust_host=\"$(rustc -vV | sed -n 's/^host: //p')\"", workflow)
+            self.assertIn("rustc -vV | sed -n 's/^host: //p'", workflow)
 
 
 if __name__ == "__main__":

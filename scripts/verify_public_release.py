@@ -927,7 +927,82 @@ def verify_supplemental_desktop_asset(
     )
 
 
+HEADLESS_FIRST_VERSION = (0, 5, 0)
+MAX_HEADLESS_ARCHIVE_BYTES = 768 * 1024 * 1024
+
+
+def verify_headless_public_release(version: str, timeout: float) -> None:
+    """Verify six public native Server/Runner artifacts; no npm CLI is involved."""
+    release = fetch_json(
+        f"https://api.github.com/repos/{REPO}/releases/tags/v{version}", timeout
+    )
+    if release.get("tag_name") != f"v{version}" or release.get("draft") is not False:
+        raise VerificationError("public headless GitHub Release identity is invalid")
+    raw_assets = release.get("assets")
+    if not isinstance(raw_assets, list):
+        raise VerificationError("public headless Release has no assets")
+    assets = {}
+    for item in raw_assets:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            raise VerificationError("public headless asset metadata is invalid")
+        name = item["name"]
+        if name in assets or item.get("state") != "uploaded":
+            raise VerificationError("public headless asset is duplicate or not uploaded")
+        expected_url = f"https://github.com/{REPO}/releases/download/v{version}/{name}"
+        if item.get("browser_download_url") != expected_url:
+            raise VerificationError("public headless asset URL is not canonical")
+        assets[name] = item
+    if any(
+        name.startswith(("webcodex-desktop", "webcodex-unified", "webcodex-cli"))
+        for name in assets
+    ):
+        raise VerificationError("public headless Release unexpectedly contains Desktop/CLI")
+    names = {f"webcodex-v{version}-{platform}.tar.gz" for platform in PLATFORMS}
+    if not names | {"SHA256SUMS"} <= assets.keys():
+        raise VerificationError("public headless Release is missing native archives or SHA256SUMS")
+    sums_asset = assets["SHA256SUMS"]
+    sums_body = fetch_bytes(sums_asset["browser_download_url"], MAX_JSON_BYTES, timeout)
+    sums_digest = _asset_digest(sums_asset)
+    if sums_digest is not None and hashlib.sha256(sums_body).hexdigest() != sums_digest:
+        raise VerificationError("public headless SHA256SUMS digest mismatch")
+    try:
+        lines = sums_body.decode("ascii").strip().splitlines()
+    except UnicodeDecodeError as exc:
+        raise VerificationError("public headless SHA256SUMS must be ASCII") from exc
+    checksums = {}
+    for line in lines:
+        if "  " not in line:
+            raise VerificationError("public headless checksum line has invalid syntax")
+        digest, filename = line.split("  ", 1)
+        if not SHA256_RE.fullmatch(digest) or filename in checksums or filename not in names:
+            raise VerificationError("public headless checksum has invalid hash or filename")
+        checksums[filename] = digest
+    if set(checksums) != names:
+        raise VerificationError("public headless SHA256SUMS does not cover exactly six platforms")
+    for filename in sorted(names):
+        archive = assets[filename]
+        published_digest = _asset_digest(archive)
+        if published_digest is None:
+            with tempfile.TemporaryDirectory(prefix="webcodex-headless-verify-") as temp:
+                size, published_digest = download_file(
+                    archive["browser_download_url"],
+                    Path(temp) / filename,
+                    MAX_HEADLESS_ARCHIVE_BYTES,
+                    timeout,
+                )
+                if size <= 0:
+                    raise VerificationError("public headless archive is empty")
+        if published_digest != checksums[filename]:
+            raise VerificationError(f"public headless archive digest mismatch: {filename}")
+    print(f"github_headless_release=v{version} archives={len(names)} checksum=passed")
+
+
 def verify_public_release(version: str, timeout: float, *, require_unified_installers: bool = False, require_runtime_installers: bool = False) -> None:
+    if _semver_parts(version)[0] >= HEADLESS_FIRST_VERSION:
+        if require_unified_installers or require_runtime_installers:
+            raise VerificationError("headless releases do not support Desktop/unified installers")
+        verify_headless_public_release(version, timeout)
+        return
     encoded_package = urllib.parse.quote(PACKAGE, safe="@")
     npm_url = f"https://registry.npmjs.org/{encoded_package}/{version}"
     npm_metadata = fetch_json(npm_url, timeout)
@@ -1149,7 +1224,7 @@ def verify_public_release(version: str, timeout: float, *, require_unified_insta
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Verify published WebCodex npm/GitHub release bytes on one network host."
+        description="Verify published headless GitHub archives or historical npm/GitHub releases."
     )
     parser.add_argument("--require-unified-installers", action="store_true")
     parser.add_argument("--require-runtime-installers", action="store_true")

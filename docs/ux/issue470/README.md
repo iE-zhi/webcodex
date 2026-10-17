@@ -59,7 +59,7 @@ The WebUI and browser-rendered Desktop images below use **isolated fixtures**, n
 | Computer Use gateway | Inspected the real native accessibility tree and activated Settings; permission controls/state were exposed correctly |
 | Final formatting/whitespace | Cargo formatting check and Git whitespace check passed |
 
-The reproducible browser harness is [`scripts/ui-smoke`](../../../scripts/ui-smoke/README.md). It never invokes real native commands or starts runtime services. Native reconfiguration tests use only explicitly owned fixture processes.
+The historical browser harness is no longer shipped; it never invoked real native commands or started runtime services. Native reconfiguration tests use only explicitly owned fixture processes.
 
 ## Boundaries and remaining platform acceptance
 

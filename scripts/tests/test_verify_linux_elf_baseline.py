@@ -51,23 +51,19 @@ class LinuxElfBaselineTests(unittest.TestCase):
             with self.assertRaisesRegex(verify_elf.VerificationError, "unresolved runtime dependency"):
                 verify_elf.verify(binary, "x86_64", "2.35")
 
-    def test_release_linux_package_compiles_and_probes_in_ubuntu_2204_container(self):
+    def test_headless_linux_runtime_build_checks_elf_and_glibc(self):
         workflow = Path(".github/workflows/release-build.yml").read_text(encoding="utf-8")
-        start = workflow.index("- name: Build and package Linux installer in Ubuntu 22.04 native container")
-        end = workflow.index("- name: Verify native host and prepare exact runtime inputs", start)
+        start = workflow.index("- name: Build and verify inside glibc 2.17 userspace")
+        end = workflow.index("- name: Upload Linux candidate", start)
         linux_step = workflow[start:end]
-        self.assertIn("ubuntu:22.04 bash -lc", linux_step)
-        self.assertIn("Ubuntu 22.04 container is not native", linux_step)
-        self.assertIn("verify_linux_elf_baseline.py", linux_step)
-        self.assertIn("collect_unified_installer_inputs.py", linux_step)
-        self.assertIn("libwebkit2gtk-4.1-dev", linux_step)
-        self.assertIn("dpkg-dev rpm cpio", linux_step)
-        self.assertIn("for suffix in deb rpm", linux_step)
-        self.assertIn("--output \"dist/webcodex-unified-v$VERSION-$PLATFORM.$suffix\"", linux_step)
-        self.assertIn('"webcodex-unified-v$VERSION-linux-x64.rpm"', workflow)
-        self.assertIn('"webcodex-unified-v$VERSION-linux-arm64.rpm"', workflow)
-        self.assertNotIn('.json.sha256"            "webcodex-unified', workflow)
-        self.assertIn("if: matrix.os == 'macos'", workflow[end:])
+        self.assertIn("cargo build --locked --release -p webcodex -p webcodex-runner", linux_step)
+        self.assertIn("readelf -h", linux_step)
+        self.assertIn("readelf --version-info", linux_step)
+        self.assertIn("requires GLIBC_$max_glibc", linux_step)
+        self.assertIn("2.17 release floor", linux_step)
+        self.assertIn("scripts/package_release_artifact.sh", linux_step)
+        self.assertNotIn("libwebkit", linux_step)
+        self.assertNotIn("webcodex-desktop", linux_step)
 
 
 if __name__ == "__main__":

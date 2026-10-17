@@ -264,7 +264,7 @@ class ReleasePlanResumeTests(unittest.TestCase):
                         plan.resume_plan(state_file=path, timeout=5, wait_secs=0)
                 collect.assert_not_called()
 
-    def test_successful_build_collects_and_stages_then_pauses_for_draft(self) -> None:
+    def test_successful_build_collects_headless_bundle_then_pauses_for_draft(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             state = _state(root, phase=plan.PHASE_BUILD_PASSED)
@@ -273,7 +273,6 @@ class ReleasePlanResumeTests(unittest.TestCase):
             plan._write_state(state_path, state)
             with (
                 mock.patch.object(collector := plan.collector, "collect_bundle", return_value={"source_sha": SOURCE, "tag": TAG}) as collect,
-                mock.patch.object(publication, "stage_npm", return_value={"npm_smoke": "passed"}) as stage,
                 mock.patch.object(
                     publication,
                     "verify_draft_assets",
@@ -284,9 +283,7 @@ class ReleasePlanResumeTests(unittest.TestCase):
             self.assertEqual(code, 3)
             self.assertEqual(summary["phase"], plan.PHASE_AWAIT_DRAFT)
             collect.assert_called_once()
-            stage.assert_called_once()
             self.assertTrue(collect.call_args.kwargs["require_unified_installers"])
-            self.assertTrue(stage.call_args.kwargs["require_unified_installers"])
             self.assertTrue(draft.call_args.kwargs["require_unified_installers"])
 
     def test_unrecorded_existing_stage_fails_closed_for_reconciliation(self) -> None:

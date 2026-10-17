@@ -33,14 +33,12 @@ project id `agent:<client_id>:<project_id>`.
 
 ## Product surfaces
 
-WebCodex exposes the same Server/Runner runtime through several user-facing adapters:
-
-- **MCP** — the recommended model-facing integration for ChatGPT, Claude, and other MCP clients.
-- **REST** — the Server HTTP runtime API.
-- **CLI** — operator/developer setup, lifecycle, and diagnostics.
-- **Desktop** — native setup and management UI over the same Environment and runtime; it is not a second execution backend.
-- **Console** — the Server-hosted operator browser surface.
-
+WebCodex runs as two headless backend services. The Server embeds the
+OpenAI Secure MCP Tunnel and authenticates MCP/REST requests; the Runner
+executes authorized local or remote project operations. CLI is a setup and
+diagnostic tool, not a third background service. Desktop and browser consoles
+are not shipped. MCP retains only Computer screenshots and Host continuation
+carriers required for runtime operation.
 A regular Server + Runner and the local `webcodex share` / `webcodex run` lifecycle all expose the ordinary WebCodex runtime. `share` and `run` are deployment/auth/reachability conveniences around one locally registered Project; they do not define a second coding runtime or task model. Their project-scoped credentials restrict which Runner/Project is visible without changing ToolRuntime semantics.
 
 Internal type names used to route these adapters are maintainer implementation details; ordinary users should follow the tools and connection instructions returned by the current Server.
@@ -86,7 +84,7 @@ Maintainer-level lifecycle and Agent Task/TaskAttempt details live in [Durable A
 
 The Server also owns an independent durable **Goal** domain for high-level intent/control state. A Goal answers what the user ultimately wants and the authoritative high-level lifecycle of that intent. It is not a Workflow Session, Agent Task, Job, Project selector, credential, or execution authority. Goal references to Agent Tasks and Workflow Sessions are explicit correlation only; dereferencing those ids always re-runs the referenced domain's normal authorization.
 
-Stateless MCP 2026 can optionally present one exact Goal through the sparse Goal Plan App. `present_goal_plan(goal_id)` is the sole model-visible App-bound entry; the View converges through the ModelHidden/app-only `sync_goal_plan(goal_id)` read. Both are bounded observations over the same SQLite Goal truth and carry no Project, Runner, Job, Workflow Session mutation, or Host-continuation authority. Existing coding tools do not require Goal identity and keep their normal/native presentation.
+The headless runtime exposes Goal state through authenticated tools; it does not publish a Goal Plan UI.
 
 ## Goal, Job, and Workflow Session continuity
 
@@ -159,7 +157,6 @@ MCP / Runtime HTTP --> ToolRuntime --+--> Project resolution --> Runner bridge
                                                |      +--> Workflow Session / Handoff / Hygiene
                                                +--> Durable Agent / Conversation / Delivery / Wake
                                                +--> Goal (high-level durable intent/control; no execution dispatch)
-Runtime Console -----------------------> canonical Server HTTP/kernel paths above
 ```
 
 - `route_metadata` — canonical HTTP route identity and security/surface metadata;

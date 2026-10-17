@@ -44,15 +44,14 @@ fi
 # The release operator binds one successful exact-source source-branch CI run. For
 # release/v* sources, the branch push simultaneously starts release-readiness in
 # source-evidence mode, which precomputes:
-#   - extended native Linux ARM64, macOS Intel/Desktop, and Windows ARM64/Desktop checks
+#   - extended native Linux ARM64, macOS Intel, and Windows ARM64 checks
 #   - WebSocket + polling zero-config E2E
 #   - EVAL_MODE=compare bash scripts/eval_coding_loop.sh with prebuilt debug fixtures
 #   - disposable linux/amd64 + linux/arm64 Server-image/runtime/bootstrap validation
 # The later operator dispatch revalidates the exact CI + evidence run attempts instead
 # of repeating them. A main-source dispatch keeps the slow evidence fallback so normal
 # main pushes do not consume rare native runners. Six-platform release-profile/package
-# candidates plus primary Desktop artifacts are still built only after immutable
-# tagging by release-build.yml; macOS Intel Desktop is a post-publication supplement.#
+# candidates are still built only after immutable tagging by release-build.yml.
 # Usage:
 #   bash scripts/release_check.sh
 #
@@ -90,6 +89,11 @@ fi
 # Sanity: git present (needed for the sensitive-file static check).
 if ! command -v git >/dev/null 2>&1; then
     printf '[release] git is required\n' >&2
+    exit 2
+fi
+# Release tooling requires the Python 3.11+ standard-library TOML parser.
+if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import tomllib' >/dev/null 2>&1; then
+    printf '[release] Python 3.11 or newer is required for release tooling (tomllib)\n' >&2
     exit 2
 fi
 # Sanity: bash present for the E2E harness (inherited from this interpreter).
@@ -193,20 +197,16 @@ if bash scripts/test_python_tooling.sh \
     && python3 scripts/release_operator.py build-start --help >/dev/null \
     && python3 scripts/release_operator.py build-status --help >/dev/null \
     && python3 scripts/release_operator.py collect --help >/dev/null \
-    && python3 scripts/release_operator.py stage-npm --help >/dev/null \
     && python3 scripts/release_operator.py verify-draft --help >/dev/null \
     && python3 scripts/release_operator.py doctor --help >/dev/null \
     && python3 scripts/release_operator.py release-init --help >/dev/null \
     && python3 scripts/release_operator.py release-resume --help >/dev/null \
     && python3 scripts/release_operator.py release-status --help >/dev/null \
-    && test -f scripts/prepare_desktop_bundle.ps1 \
-    && test -f scripts/desktop_install_windows_smoke.ps1 \
-    && test -f scripts/prepare_desktop_bundle_macos.py \
-    && test -f scripts/desktop_install_macos_smoke.sh \
-    && grep -Fq 'test-windows-desktop:' .github/workflows/ci.yml \
-    && grep -Fq 'DESKTOP_RESULT' .github/workflows/ci.yml \
-    && grep -Fq 'prepare_desktop_bundle_macos.py' .github/workflows/ci.yml \
-    && grep -Fq 'desktop_install_macos_smoke.sh' .github/workflows/ci.yml \
+    && ! test -d apps/desktop \
+    && ! test -d frontend \
+    && test -f src/mcp_computer_app.html \
+    && test -f src/mcp_agent_continuation_app.html \
+    && test -f src/mcp_job_terminal_continuation_app.html \
     && grep -Fq 'test-docker-server:' .github/workflows/ci.yml \
     && grep -Fq 'workflow_dispatch:' .github/workflows/extended-native.yml \
     && grep -Fq 'macos-15-intel' .github/workflows/extended-native.yml \
@@ -220,19 +220,13 @@ if bash scripts/test_python_tooling.sh \
     && grep -Fq "github.event_name == 'push' || inputs.source_ref == 'main'" .github/workflows/release-readiness.yml \
     && grep -Fq 'refs/heads/$INPUT_SOURCE_REF' .github/workflows/release-readiness.yml \
     && grep -Fq 'refs/tags/$tag' .github/workflows/release-build.yml \
-    && grep -Fq 'desktop_artifacts' .github/workflows/release-build.yml \
-    && grep -Fq 'prepare_desktop_bundle.ps1' .github/workflows/release-build.yml \
-    && grep -Fq 'win32-arm64-setup.exe' .github/workflows/release-build.yml \
-    && grep -Fq 'prepare_desktop_bundle_macos.py' .github/workflows/release-build.yml \
-    && grep -Fq 'desktop_darwin_x64_supplemental' .github/workflows/release-build.yml \
-    && test -f .github/workflows/release-desktop-darwin-x64.yml \
-    && grep -Fq 'types: [published]' .github/workflows/release-desktop-darwin-x64.yml \
-    && grep -Fq 'macos-15-intel' .github/workflows/release-desktop-darwin-x64.yml \
-    && grep -Fq 'webcodex-v$VERSION-$PLATFORM.tar.gz' .github/workflows/release-desktop-darwin-x64.yml \
-    && grep -Fq 'gh release upload' .github/workflows/release-desktop-darwin-x64.yml \
-    && grep -Fq 'desktop_install_macos_smoke.sh' .github/workflows/release-desktop-darwin-x64.yml \
+    && grep -Fq 'verify_bundle_directory' .github/workflows/release-build.yml \
+    && ! grep -Fq 'apps/desktop' .github/workflows/release-build.yml \
+    && ! grep -Fq 'frontend/package-lock.json' .github/workflows/release-build.yml \
     && python3 scripts/check_markdown_links.py \
-    && bash scripts/tests/test_npm_package_smoke_existing_binaries.sh; then
+    && test ! -d crates/webcodex-cli \
+    && test ! -d npm/webcodex \
+    && grep -Fq 'webcodex-runner' scripts/package_release_artifact.sh; then
     ok "release verification tooling self-tests"
 else
     die "release verification tooling self-tests"

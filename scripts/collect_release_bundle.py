@@ -39,7 +39,7 @@ except ImportError:
     import runtime_installer_manifest as runtime_contract
     import prepare_release_metadata as release_metadata
 
-BINARIES = ("webcodex", "webcodex-server", "webcodex-runner")
+BINARIES = ("webcodex-server", "webcodex-runner")
 DESKTOP_PLATFORMS = ("darwin-arm64", "win32-x64", "win32-arm64")
 SUPPLEMENTAL_DESKTOP_PLATFORMS = ("darwin-x64",)
 ALL_DESKTOP_PLATFORMS = ("darwin-x64", *DESKTOP_PLATFORMS)
@@ -54,6 +54,8 @@ def primary_desktop_platforms_for_version(version: str) -> tuple[str, ...]:
         raise CollectionError(f"invalid release version: {version!r}") from exc
     if len(core) != 3:
         raise CollectionError(f"invalid release version: {version!r}")
+    if core >= (0, 5, 0):
+        return ()
     return DESKTOP_PLATFORMS if core >= SUPPLEMENTAL_DESKTOP_FIRST_VERSION else ALL_DESKTOP_PLATFORMS
 RELEASE_WORKFLOW_PATH = ".github/workflows/release-build.yml"
 API_VERSION = "2022-11-28"
@@ -791,8 +793,9 @@ def verify_bundle_directory(
         downloadable.add(runtime_manifest["filename"])
     if runtime_selected:
         downloadable.add("manifest-v2.json")
-        if build_kind != "release" or len(downloadable) != 32:
-            raise CollectionError("Runtime bundle must have exactly 32 primary checksummed release assets")
+        expected_count = 32 - (len(DESKTOP_PLATFORMS) if not desktop_platforms else 0)
+        if build_kind != "release" or len(downloadable) != expected_count:
+            raise CollectionError(f"Runtime bundle must have exactly {expected_count} primary checksummed release assets")
     sums = _parse_sha256sums(sums_text, downloadable)
     if installer_files and build_kind == "release":
         if sums["manifest.json"] != sha256_file(root / "manifest.json"):

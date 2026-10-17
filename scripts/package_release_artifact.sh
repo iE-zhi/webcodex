@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [ -n "${WEBCODEX_RELEASE_VERSION:-}" ]; then
     VERSION="$WEBCODEX_RELEASE_VERSION"
 else
-    VERSION="$(node -e "process.stdout.write(require('$ROOT/npm/webcodex/package.json').version)")"
+    VERSION="$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1], "rb"))["workspace"]["package"]["version"])' "$ROOT/Cargo.toml")"
 fi
 PLATFORM="${WEBCODEX_RELEASE_PLATFORM:-linux-x64}"
 BIN_DIR="${WEBCODEX_RELEASE_BIN_DIR:-$ROOT/target/release}"
@@ -16,7 +16,7 @@ cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
 mkdir -p "$OUT_DIR" "$TMP/package"
-for name in webcodex webcodex-server webcodex-runner; do
+for name in webcodex-server webcodex-runner; do
     source="$BIN_DIR/$name"
     if [ ! -f "$source" ] || [ ! -x "$source" ]; then
         echo "missing executable release binary: $source" >&2
@@ -26,7 +26,7 @@ for name in webcodex webcodex-server webcodex-runner; do
 done
 
 identity=""
-for name in webcodex webcodex-server webcodex-runner; do
+for name in webcodex-server webcodex-runner; do
     output="$($TMP/package/$name --version)"
     case "$output" in
         "$name $VERSION "*|"$name $VERSION") ;;
@@ -39,7 +39,7 @@ for name in webcodex webcodex-server webcodex-runner; do
     fi
 done
 
-tar -czf "$ARCHIVE.tmp" -C "$TMP/package" webcodex webcodex-server webcodex-runner
+tar -czf "$ARCHIVE.tmp" -C "$TMP/package" webcodex-server webcodex-runner
 mv -f "$ARCHIVE.tmp" "$ARCHIVE"
 if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$ARCHIVE"

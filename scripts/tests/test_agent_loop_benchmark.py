@@ -62,6 +62,7 @@ class AgentLoopBenchmarkTests(unittest.TestCase):
         terminate.assert_called_once_with(process)
 
     def test_windows_host_driver_fails_closed_as_unsupported(self) -> None:
+        cwd = Path(".")  # pathlib cannot construct WindowsPath on a POSIX test host.
         with mock.patch.object(benchmark.os, "name", "nt"):
             with self.assertRaisesRegex(
                 benchmark.DriverPlatformUnsupported,
@@ -69,7 +70,7 @@ class AgentLoopBenchmarkTests(unittest.TestCase):
             ):
                 benchmark._run_driver(
                     [sys.executable, "-c", "pass"],
-                    cwd=Path("."),
+                    cwd=cwd,
                     env={},
                 )
 

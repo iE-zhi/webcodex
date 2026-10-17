@@ -2,7 +2,7 @@
 """Crash-safe high-level orchestration for reversible WebCodex release steps.
 
 The plan deliberately stops at irreversible human-authorization boundaries. It
-never creates/pushes a tag, creates/publishes a GitHub Release, publishes npm, or
+never creates/pushes a tag, publishes a GitHub Release, or
 deploys services. Those actions remain explicit operator decisions; `resume`
 reconciles their externally visible result before advancing.
 """
@@ -447,22 +447,17 @@ def resume_plan(*, state_file: Path, timeout: float, wait_secs: int) -> tuple[di
         if phase == PHASE_BUNDLE:
             stage = Path(state["stage_dir"])
             if stage.exists() or stage.is_symlink():
+                # Historical pending staging cannot be silently deleted or adopted.
                 _update(state_path, state, action="stage_requires_reconciliation")
                 return _summary(
                     state,
                     status="needs_reconciliation",
                     state_file=state_path,
-                    next_action="the npm stage path already exists but success was not recorded; inspect it before deleting or retrying",
+                    next_action="a historical npm stage path exists; inspect it manually before continuing",
                 ), 4
-            publication.stage_npm(
-                repo=state["repo"],
-                require_unified_installers=state["require_unified_installers"],
-                require_runtime_installers=state["require_runtime_installers"],
-                bundle_dir=Path(state["bundle_dir"]),
-                source_root=Path(state["root"]),
-                output_dir=stage,
-            )
-            _update(state_path, state, phase=PHASE_NPM_STAGED, action="npm_staged")
+            # Headless releases have no npm CLI. Keep the old durable phase
+            # spelling for compatibility with in-flight release plan state.
+            _update(state_path, state, phase=PHASE_NPM_STAGED, action="headless_bundle_ready")
             continue
 
         if phase == PHASE_NPM_STAGED:
@@ -500,7 +495,7 @@ def resume_plan(*, state_file: Path, timeout: float, wait_secs: int) -> tuple[di
                 state,
                 status="needs_authorization",
                 state_file=state_path,
-                next_action="publish the verified GitHub draft and staged npm package only after explicit approval; "
+                next_action="publish the verified GitHub draft only after explicit approval; "
                 "run public verification as a separate final gate"
                 + (" with --require-unified-installers" if state["require_unified_installers"] else "")
                 + (" --require-runtime-installers" if state["require_runtime_installers"] else ""),
@@ -533,7 +528,7 @@ def _status_projection(state: dict) -> tuple[str, str | None]:
     if phase == PHASE_AWAIT_PUBLICATION:
         return (
             "needs_authorization",
-            "publish the verified GitHub draft and staged npm package only after explicit approval; public verification remains a separate final gate",
+            "publish the verified GitHub draft only after explicit approval; verify the public six-platform native release as a separate final gate",
         )
     if phase in {PHASE_READINESS, PHASE_BUILD}:
         return "waiting", "resume the same release plan"

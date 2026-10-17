@@ -361,7 +361,7 @@ jobs:
             *) echo "Unexpected native Server-image architecture: $(uname -m) for $EXPECTED_ARCH" >&2; exit 1 ;;
           esac
 
-          version="$(python3 -c 'import json; print(json.load(open("npm/webcodex/package.json", encoding="utf-8"))["version"])')"
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
           built_at="$(git show -s --format=%ct HEAD)"
           short_commit="${INPUT_SOURCE_SHA:0:12}"
           image="webcodex-server-readiness:${EVIDENCE_ID#rr_}-$IMAGE_SLUG"
@@ -387,12 +387,11 @@ jobs:
             test "$(id -u)" = 10001
             test "$(id -g)" = 10001
             test ! -e /usr/local/bin/webcodex-runner
+            test ! -e /usr/local/bin/webcodex
           '
 
           expected_server="webcodex-server $version (commit $short_commit, dirty=false, built_at=$built_at)"
-          expected_cli="webcodex $version (commit $short_commit, dirty=false, built_at=$built_at)"
           test "$(docker run --rm "$image" --version)" = "$expected_server"
-          test "$(docker run --rm --entrypoint /usr/local/bin/webcodex "$image" --version)" = "$expected_cli"
 
           docker run -d --name "$name" \
             -e WEBCODEX_TOKEN=0000000000000000000000000000000000000000000000000000000000000000 \

@@ -1,0 +1,16 @@
+# WebCodex Runner (headless); install only webcodex-runner on this machine.
+server_url = "https://webcodex.example.com"
+client_id = "build-host-1"
+display_name = "Build Host 1"
+owner = "operator"
+token_file = "/etc/webcodex/secrets/runner-token"
+project_registry_dir = "/etc/webcodex/projects"
+transport = "websocket"
+poll_interval_ms = 1000
+
+[policy]
+allowed_roots = ["/srv/projects"]
+allow_cwd_anywhere = false
+allow_raw_shell = true
+max_timeout_secs = 3600
+max_output_bytes = 262144

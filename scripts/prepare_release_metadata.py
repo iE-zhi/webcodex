@@ -24,7 +24,7 @@ PLATFORMS = RUNTIME_PLATFORMS
 PRIMARY_DESKTOP_PLATFORMS = ("darwin-arm64", "win32-x64", "win32-arm64")
 LEGACY_DESKTOP_PLATFORMS = ("darwin-x64", *PRIMARY_DESKTOP_PLATFORMS)
 SUPPLEMENTAL_DESKTOP_FIRST_VERSION = (0, 4, 3)
-BINARIES = ("webcodex", "webcodex-server", "webcodex-runner")
+BINARIES = ("webcodex-server", "webcodex-runner")
 INSTALLER_TARGETS = {
     "linux-x64-deb": ("linux-x64", "deb"),
     "linux-x64-rpm": ("linux-x64", "rpm"),
@@ -155,6 +155,8 @@ def desktop_platforms_for_version(version: str) -> tuple[str, ...]:
         raise SystemExit(f"invalid release version: {version}") from exc
     if len(core) != 3:
         raise SystemExit(f"invalid release version: {version}")
+    if core >= (0, 5, 0):
+        return ()
     return PRIMARY_DESKTOP_PLATFORMS if core >= SUPPLEMENTAL_DESKTOP_FIRST_VERSION else LEGACY_DESKTOP_PLATFORMS
 
 
@@ -207,11 +209,8 @@ def main() -> int:
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--workflow-run-id", required=True, type=int)
     parser.add_argument("--workflow-ref", required=True)
-    parser.add_argument(
-        "--package-json",
-        type=Path,
-        default=ROOT / "npm" / "webcodex" / "package.json",
-    )
+    parser.add_argument("--cargo-toml", type=Path, default=ROOT / "Cargo.toml")
+    parser.add_argument("--package-json", type=Path, default=None, help="Legacy installer fixture only")
     args = parser.parse_args()
 
     if args.require_runtime_installers and not args.require_unified_installers:
@@ -220,11 +219,15 @@ def main() -> int:
     if not version or any(ch.isspace() for ch in version):
         raise SystemExit("invalid release version")
 
-    package = json.loads(args.package_json.read_text(encoding="utf-8"))
-    if package.get("version") != version:
-        raise SystemExit(
-            f"package version mismatch: expected {version}, found {package.get('version')!r}"
-        )
+    import tomllib
+    if args.package_json:
+        # Accept old archived installer-fixture inputs without depending on npm.
+        current = json.loads(args.package_json.read_text(encoding="utf-8"))["version"]
+    else:
+        cargo = tomllib.loads(args.cargo_toml.read_text(encoding="utf-8"))
+        current = cargo["workspace"]["package"]["version"]
+    if current != version:
+        raise SystemExit(f"workspace version mismatch: expected {version}, found {current!r}")
 
     artifacts: dict[str, dict[str, str]] = {}
     checksum_lines: list[str] = []
@@ -391,11 +394,11 @@ def main() -> int:
     manifest_path = args.output_dir / "manifest.json"
     atomic_write(manifest_path, json.dumps(manifest, indent=2) + "\n")
     if installers:
-        # The same retained bytes serve npm, the download page, and Desktop.
-        # Legacy runtime-only manifests remain outside the public asset set.
+        # Retain the checksum-bound public manifest for historical installers.
         checksum_lines.append(f"{sha256(manifest_path)}  manifest.json")
-    if runtime_installers and len(checksum_lines) + 1 != 32:
-        raise SystemExit("Runtime release requires exactly 32 primary checksum records including Runtime contract")
+    expected_count = 32 - (len(PRIMARY_DESKTOP_PLATFORMS) if not desktop_platforms_for_version(version) else 0)
+    if runtime_installers and len(checksum_lines) + 1 != expected_count:
+        raise SystemExit(f"Runtime release requires exactly {expected_count} primary checksum records including Runtime contract")
     atomic_write(args.output_dir / "SHA256SUMS", "\n".join(checksum_lines) + "\n")
 
     print(f"release metadata prepared for {version}")

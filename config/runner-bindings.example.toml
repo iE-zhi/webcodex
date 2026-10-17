@@ -1,0 +1,7 @@
+# Server-only file, chmod 600. Contains only hashes (never Runner token plaintext).
+# Hash: SHA-256 over the exact "wc_agent_<64 hex chars>" credential bytes.
+[[runners]]
+username = "operator"
+client_id = "build-host-1"
+token_hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+token_prefix = "wc_agent_abcdef0"

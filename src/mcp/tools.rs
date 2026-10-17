@@ -1,5 +1,4 @@
 use super::app_registry;
-use super::presentation;
 use super::resources;
 use super::response::{
     mcp_runtime_tool_result_fallback, mcp_stateless_result, rpc_error, rpc_result,
@@ -39,10 +38,6 @@ use invocation::{
 };
 pub(super) use invocation::{parse_mcp_invocation_envelope, McpInvocationEnvelope};
 
-pub(super) const WORK_RESULT_APP_RESULT_META_KEY: &str = "webcodex/workResult";
-pub(super) const WORK_RESULT_THREAD_CONTEXT_META_KEY: &str = "webcodex/workResultThread";
-const WORK_RESULT_THREAD_ENTRYPOINT_TOOL_NAME: &str = "work_result_thread_panel";
-
 fn filter_descriptors_for_oauth(
     mut specs: Vec<ToolDescriptor>,
     auth: Option<&AuthContext>,
@@ -51,34 +46,6 @@ fn filter_descriptors_for_oauth(
         crate::tool_runtime::kernel::runtime_tool_scope_allows_discovery(auth, &spec.name)
     });
     specs
-}
-
-fn work_result_thread_entrypoint_tool_json(compact: bool) -> Value {
-    let state = tool_registry::work_result_app_tool_descriptors()
-        .into_iter()
-        .find(|spec| spec.name == "get_work_result_state")
-        .expect("Work Result state App tool must exist");
-    // Only this Host launcher can succeed without a selected Work Result.
-    // Canonical state reads retain their exact Project-bound output contract.
-    let annotations = state.annotations();
-    let output_schema = (!compact).then(|| {
-        let mut schema = state.into_spec().output_schema;
-        schema["properties"]["output"]["properties"]["work_result"]["type"] =
-            json!(["object", "null"]);
-        schema
-    });
-    mcp_tool_parts_json(
-        WORK_RESULT_THREAD_ENTRYPOINT_TOOL_NAME.to_string(),
-        "Host UI entrypoint only; models should use present_work_result, not call this tool. Opens the Work Result already presented in this exact Host Window, or an empty panel when none has been presented. The Host invokes this entrypoint with an empty object; WebCodex resolves only a prior successful present_work_result binding from the same authenticated Window and then reuses the normal work_result_state authorization and projection path. An empty panel selects no Project or Session and creates no binding.".to_string(),
-        json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false
-        }),
-        output_schema,
-        annotations,
-        false,
-    )
 }
 
 // Discovery projection only. Canonical operator-extension specs still own
@@ -330,122 +297,19 @@ pub(super) fn mcp_tools_list_payload_with_features_for_auth(
         .map(|spec| mcp_tool_descriptor_json(spec, compact, app_enabled, Some(stateless_2026)))
         .collect::<Vec<_>>();
     if app_enabled && stateless_2026 {
-        for name in super::workbench::CANONICAL_TOOLS {
-            if tools.iter().any(|tool| tool["name"] == *name)
-                || !crate::tool_runtime::kernel::runtime_tool_scope_allows_discovery(auth, name)
-            {
-                continue;
-            }
-            if let Some(definition) =
-                crate::tool_runtime::tool_definition::lookup_tool_definition(name)
-            {
-                if let Some(model) = definition.model_spec {
-                    let spec = ToolDescriptor {
-                        name: (*name).into(),
-                        description: model.description.into(),
-                        discovery_keywords: model.discovery_keywords,
-                    };
-                    let mut value = mcp_tool_descriptor_json(spec, compact, false, None);
-                    attach_app_visibility(&mut value);
-                    tools.push(value);
-                }
-            }
-        }
-        tools.extend(
-            super::workbench::descriptors(compact)
+        let app_specs = filter_descriptors_for_oauth(
+            tool_registry::agent_continuation_app_tool_descriptors()
                 .into_iter()
-                .filter(|tool| match tool["name"].as_str() {
-                    Some("update_workbench_settings") => {
-                        auth.is_some_and(|a| a.kind != crate::auth::AuthKind::OpenAnonymous)
-                            && check_runtime_tool_scope(auth, "update_goal").is_ok()
-                    }
-                    Some("submit_workbench_work") => {
-                        check_runtime_tool_scope(auth, "create_agent_task").is_ok()
-                    }
-                    _ => true,
-                }),
-        );
-        // The View uses the existing authorized Session discovery implementation.
-        if !tools.iter().any(|tool| tool["name"] == "list_sessions") {
-            if let Some(definition) =
-                crate::tool_runtime::tool_definition::lookup_tool_definition("list_sessions")
-            {
-                let description = if compact {
-                    "List authorized Sessions for an explicitly selected Project. Page with offset/limit and select an exact session_id before browsing recorded outputs."
-                } else {
-                    definition
-                        .model_spec
-                        .expect("public Session descriptor")
-                        .description
-                };
-                let spec = ToolDescriptor {
-                    name: "list_sessions".into(),
-                    description: description.into(),
-                    discovery_keywords: definition.model_spec.unwrap().discovery_keywords,
-                };
-                for spec in filter_descriptors_for_oauth(vec![spec], auth) {
-                    let mut value = mcp_tool_descriptor_json(spec, compact, false, None);
-                    attach_app_visibility(&mut value);
-                    tools.push(value);
-                }
-            }
-        }
-        if check_runtime_tool_scope(auth, "get_work_result_state").is_ok() {
-            let mut thread_entrypoint = work_result_thread_entrypoint_tool_json(compact);
-            // A user-opened launcher renders a View, so it must remain public.
-            // ChatGPT rejects private/App-only tools with rendering resources.
-            attach_app_metadata(
-                &mut thread_entrypoint,
-                app_registry::MCP_WORK_RESULT_UI_RESOURCE_URI,
-            );
-            attach_openai_thread_entrypoint(&mut thread_entrypoint);
-            tools.push(thread_entrypoint);
-        }
-        let mut app_specs = filter_descriptors_for_oauth(
-            tool_registry::goal_plan_app_tool_descriptors()
-                .into_iter()
-                .chain(tool_registry::work_result_app_tool_descriptors())
-                .chain(tool_registry::artifact_app_tool_descriptors())
-                .chain(tool_registry::agent_continuation_app_tool_descriptors())
                 .chain(tool_registry::job_terminal_continuation_app_tool_descriptors())
                 .collect(),
             auth,
-        )
-        .into_iter()
-        .map(|spec| {
-            let agent_continuation_tool = is_agent_continuation_app_tool_name(&spec.name);
-            let job_terminal_continuation_tool =
-                is_job_terminal_continuation_app_tool_name(&spec.name);
-            let goal_sync_tool = spec.name == "sync_goal_plan";
-            let mut value = mcp_tool_descriptor_json(spec, compact, false, None);
-            attach_app_visibility(&mut value);
-            if agent_continuation_tool || job_terminal_continuation_tool || goal_sync_tool {
-                // Bridge helpers return data to an existing View; they never
-                // render another widget. Private rendering tools are rejected
-                // by ChatGPT during discovery/refresh.
-                attach_agent_continuation_app_diagnostic_schema(&mut value);
-            }
-            value
-        })
-        .collect::<Vec<_>>();
-        tools.append(&mut app_specs);
-        if ["list_projects", "list_goals"]
-            .iter()
-            .any(|tool| crate::tool_runtime::kernel::check_runtime_tool_scope(auth, tool).is_ok())
-        {
-            let mut mention = json!({
-                "name":"search_mentions","description":"Search authorized WebCodex Projects and owned Goals for resource references. Files and artifacts require explicit Workbench selection.",
-                "inputSchema":{"type":"object","properties":{"query":{"type":"string","maxLength":200}},"required":["query"],"additionalProperties":false},
-                "annotations":{"readOnlyHint":true},"_meta":{"openai/extensions":{"mentions/search":{}},"ui":{"visibility":["app"]}}
-            });
-            if compact {
-                super::discovery::compact_tool(&mut mention);
-            } else {
-                mention["outputSchema"] = json!({"type":"object","properties":{"items":{"type":"array","maxItems":20,"items":{"type":"object","required":["type","uri","name"],"properties":{"type":{"const":"resource_link"},"uri":{"type":"string"},"name":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"mimeType":{"type":"string"},"_meta":{"type":"object"}},"additionalProperties":false}}},"required":["items"],"additionalProperties":false});
-            }
-
-            tools.push(mention);
-        }
+        );
+        tools.extend(app_specs.into_iter().map(|spec| {
+            let mut tool = mcp_tool_descriptor_json(spec, compact, false, None);
+            attach_app_visibility(&mut tool);
+            attach_agent_continuation_app_diagnostic_schema(&mut tool);
+            tool
+        }));
     }
     if auth.is_some_and(AuthContext::is_oauth_token) {
         for tool in tools.iter_mut() {
@@ -816,13 +680,7 @@ pub(super) fn add_stateless_workflow_recorder_metadata(payload: &mut Value) {
                     | "read_changed_file_diff"
                     | "search_mentions"
             )
-        ) || tool_name == Some(WORK_RESULT_THREAD_ENTRYPOINT_TOOL_NAME)
-            || tool_name.is_some_and(is_host_continuation_app_tool_name)
-            || (tool.pointer("/_meta/ui/visibility") == Some(&json!(["app"]))
-                && tool_name.is_some_and(|name| {
-                    super::workbench::is_adapter_tool(name)
-                        || super::workbench::CANONICAL_TOOLS.contains(&name)
-                }))
+        ) || tool_name.is_some_and(is_host_continuation_app_tool_name)
         {
             continue;
         }
@@ -890,85 +748,6 @@ pub(super) fn attach_app_metadata(value: &mut Value, resource_uri: &str) {
         "resourceUri".to_string(),
         Value::String(resource_uri.to_string()),
     );
-}
-
-fn attach_openai_thread_entrypoint(value: &mut Value) {
-    let Some(object) = value.as_object_mut() else {
-        return;
-    };
-    object.insert(
-        "title".to_string(),
-        Value::String("WebCodex Work Result".to_string()),
-    );
-    let Some(meta) = tool_meta_object(value) else {
-        return;
-    };
-    meta.insert(
-        "openai/ui".to_string(),
-        json!({
-            "entrypoints": [
-                {"type": "thread"}
-            ]
-        }),
-    );
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct WorkResultThreadBinding {
-    project: String,
-    session_id: Option<String>,
-}
-
-fn work_result_thread_binding(
-    runtime: &ToolRuntime,
-    auth: Option<&AuthContext>,
-    window: Option<&crate::client_window::ClientWindow>,
-) -> Result<Option<WorkResultThreadBinding>, String> {
-    let window = window.ok_or_else(|| {
-        "Work Result thread panel requires a stable Host Window identity".to_string()
-    })?;
-    let auth = auth
-        .filter(|auth| !auth.is_open_anonymous())
-        .ok_or_else(|| {
-            "Work Result thread panel requires a stable authenticated principal".to_string()
-        })?;
-    let (principal_kind, principal_id) =
-        crate::tool_runtime::runtime_observation_principal(Some(auth)).map_err(|_| {
-            "Work Result thread panel principal identity is unavailable".to_string()
-        })?;
-    let db = runtime
-        .window_activity_db
-        .as_ref()
-        .ok_or_else(|| "Work Result thread panel activity store is unavailable".to_string())?;
-    let event = db
-        .latest_successful_window_action(
-            window.key(),
-            (principal_kind.as_str(), principal_id.as_str()),
-            "present_work_result",
-        )
-        .map_err(|_| "Work Result thread panel activity lookup failed".to_string())?;
-    let Some(event) = event else {
-        return Ok(None);
-    };
-    let project = event
-        .project
-        .ok_or_else(|| "Work Result thread panel presentation binding is invalid".to_string())?;
-    Ok(Some(WorkResultThreadBinding {
-        project,
-        // This comes from the exact selected present_work_result event's
-        // canonical ActionAudit correlation. Never substitute Window
-        // affinity from another action or Session.
-        session_id: event.business_session_id,
-    }))
-}
-
-#[cfg(test)]
-pub(super) fn work_result_thread_binding_for_test(
-    runtime: &ToolRuntime,
-    auth: Option<&AuthContext>,
-    window: Option<&crate::client_window::ClientWindow>,
-) -> Result<Option<(String, Option<String>)>, String> {
-    work_result_thread_binding(runtime, auth, window)
-        .map(|binding| binding.map(|binding| (binding.project, binding.session_id)))
 }
 
 fn attach_app_visibility(value: &mut Value) {
@@ -1093,21 +872,6 @@ fn attach_app_tool_content_fallback(result: &mut Value) {
         return;
     };
     result["content"] = json!([{ "type": "text", "text": text }]);
-}
-
-fn attach_work_result_app_private_result(result: &mut Value) {
-    let Some(structured) = result.get("structuredContent").cloned() else {
-        return;
-    };
-    let meta = result.as_object_mut().and_then(|result| {
-        result
-            .entry("_meta")
-            .or_insert_with(|| json!({}))
-            .as_object_mut()
-    });
-    if let Some(meta) = meta {
-        meta.insert(WORK_RESULT_APP_RESULT_META_KEY.to_string(), structured);
-    }
 }
 
 fn safe_continuation_dispatch_observation(value: Option<&Value>) -> &'static str {
@@ -1509,8 +1273,17 @@ pub(super) async fn handle_list(
     handle_list_inner(None, id, auth, stateless_2026, compact_schemas, app_enabled).await
 }
 
+/// 返回当前 MCP 协议和授权范围允许使用的后端工具，不再包含 Workbench UI。
+///
+/// # 参数
+/// - `_runtime`：保留调用方的运行时借用；无界面工具发现无需读取其 UI 设置。
+/// - `id`：当前 JSON-RPC 请求标识。
+/// - `auth`：可选的调用者身份与作用域。
+/// - `stateless_2026`：是否使用无状态的 2026 MCP 协议。
+/// - `compact_schemas`：是否缩短模型工具发现描述。
+/// - `app_enabled`：Host 是否支持必要的续跑载体。
 async fn handle_list_inner(
-    runtime: Option<&ToolRuntime>,
+    _runtime: Option<&ToolRuntime>,
     id: Option<Value>,
     auth: Option<&AuthContext>,
     stateless_2026: bool,
@@ -1523,19 +1296,6 @@ async fn handle_list_inner(
         stateless_2026,
         auth,
     );
-    if let Some(runtime) = runtime.filter(|_| app_enabled) {
-        let settings = runtime.workbench_settings(auth);
-        if let Some(title) = settings.output.get("display_name").and_then(Value::as_str) {
-            if let Some(tools) = result.get_mut("tools").and_then(Value::as_array_mut) {
-                if let Some(tool) = tools
-                    .iter_mut()
-                    .find(|tool| tool["name"] == "open_webcodex_workbench")
-                {
-                    tool["title"] = json!(title);
-                }
-            }
-        }
-    }
     if let Some(tools) = result.get_mut("tools").and_then(Value::as_array_mut) {
         tools.push(adaptive_runtime_gateway_tool_json(compact_schemas));
     }

@@ -306,15 +306,19 @@ def _installer_target_option(target: str) -> str:
 
 def _upgrade_preinstall(candidate_rel: str, transaction_dir: str, authorization_file: str, runtime_dir: str, ownership_checks: str = "", recovery_dir: str = "", same_marker_file: str = "", candidate_cli_sha256: str = "", hash_checker: str = "", installed_cli: str = "", installer_target: str = "") -> str:
     target_option = _installer_target_option(installer_target)
+    checksum_check = (
+        f"""if ! printf '%s  %s\\n' '{candidate_cli_sha256}' "$candidate_cli" | {hash_checker} -c - >/dev/null 2>&1; then
+  echo "WebCodex candidate CLI failed its manifest-bound SHA-256 check." >&2
+  exit 1
+fi"""
+        if candidate_cli_sha256 else ""
+    )
     return f"""#!/bin/sh
 set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 candidate="$script_dir/{candidate_rel}"
 candidate_cli="$candidate/artifacts/bin/webcodex"
-{f'''if ! printf '%s  %s\\n' '{candidate_cli_sha256}' "$candidate_cli" | {hash_checker} -c - >/dev/null 2>&1; then
-  echo "WebCodex candidate CLI failed its manifest-bound SHA-256 check." >&2
-  exit 1
-fi''' if candidate_cli_sha256 else ''}
+{checksum_check}
 cli="$candidate_cli"
 if [ -x '{installed_cli}' ]; then cli='{installed_cli}'; fi
 {ownership_checks}

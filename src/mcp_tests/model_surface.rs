@@ -19,6 +19,44 @@ fn tool_names(value: &Value) -> Vec<&str> {
         .collect()
 }
 
+#[test]
+fn headless_discovery_and_routing_exclude_obsolete_displays() {
+    const RETIRED: &[&str] = &[
+        "present_pdf",
+        "present_docx",
+        "present_spreadsheet",
+        "present_work_result",
+        "present_goal_plan",
+        "open_webcodex_workbench",
+    ];
+    for &tool in RETIRED {
+        assert!(crate::model_surface::is_retired_display_tool(tool));
+        assert!(matches!(
+            crate::model_surface::adaptive_runtime_gateway_target_route(tool),
+            crate::model_surface::AdaptiveRuntimeGatewayTargetRoute::Unknown
+        ));
+    }
+    for compact in [false, true] {
+        for apps in [false, true] {
+            let result = crate::mcp::tools::mcp_tools_list_payload_with_features_for_auth(
+                compact, apps, true, None,
+            );
+            let descriptors = result["tools"].as_array().unwrap();
+            for &name in RETIRED {
+                assert!(
+                    !descriptors.iter().any(|tool| tool["name"] == name),
+                    "{name}"
+                );
+            }
+            // Computer Use remains available through the canonical runtime gateway.
+            assert_eq!(
+                crate::model_surface::adaptive_runtime_tool_invocation_route("observe_computer"),
+                ("gateway", Some("call_runtime_tool")),
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn model_workflow_policy_changes_never_change_cached_tools_schemas_routes_or_apps() {
     use crate::model_workflow::ModelWorkflowPolicy;
@@ -178,8 +216,6 @@ async fn adaptive_tools_list_exposes_ranked_direct_tools_and_gateway() {
         "list_jobs",
         "observe_jobs",
         "wait_for_job_readiness",
-        "present_work_result",
-        "present_goal_plan",
         "load_skill",
     ] {
         assert!(
@@ -783,9 +819,12 @@ async fn call_runtime_tool_cannot_target_itself() {
 #[tokio::test]
 async fn call_runtime_tool_rejects_direct_app_presentation_targets_when_apps_are_enabled() {
     let runtime = test_runtime();
-    for (index, target) in ["present_work_result", "present_pdf", "present_goal_plan"]
-        .into_iter()
-        .enumerate()
+    for (index, target) in [
+        "present_agent_continuation",
+        "present_job_terminal_continuation",
+    ]
+    .into_iter()
+    .enumerate()
     {
         let request = rpc(
             "tools/call",

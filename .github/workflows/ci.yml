@@ -38,16 +38,11 @@ jobs:
       needs_windows_core: ${{ steps.classify.outputs.needs_windows_core }}
       needs_windows_runner: ${{ steps.classify.outputs.needs_windows_runner }}
       needs_windows_package: ${{ steps.classify.outputs.needs_windows_package }}
-      needs_windows_desktop: ${{ steps.classify.outputs.needs_windows_desktop }}
       needs_macos: ${{ steps.classify.outputs.needs_macos }}
-      needs_macos_desktop: ${{ steps.classify.outputs.needs_macos_desktop }}
       # Older trusted PR bases do not expose the newer frontend/container/Plugin SDK outputs.
       # A historical full-native result is the safe rollout fallback for those bases.
-      needs_frontend: ${{ steps.classify.outputs.needs_frontend == 'true' || (steps.classify.outputs.needs_frontend == '' && steps.classify.outputs.needs_full_native == 'true') }}
-      needs_desktop_frontend: ${{ steps.classify.outputs.needs_desktop_frontend == 'true' || (steps.classify.outputs.needs_desktop_frontend == '' && steps.classify.outputs.needs_full_native == 'true') }}
       needs_plugin_sdk: ${{ steps.classify.outputs.needs_plugin_sdk == 'true' || (steps.classify.outputs.needs_plugin_sdk == '' && steps.classify.outputs.needs_full_native == 'true') }}
       needs_docker: ${{ steps.classify.outputs.needs_docker == 'true' || (steps.classify.outputs.needs_docker == '' && steps.classify.outputs.needs_full_native == 'true') }}
-      needs_desktop_package: ${{ steps.classify.outputs.needs_desktop_package }}
       needs_full_native: ${{ steps.classify.outputs.needs_full_native }}
       categories: ${{ steps.classify.outputs.categories }}
       reason: ${{ steps.classify.outputs.reason }}
@@ -79,14 +74,9 @@ jobs:
                 needs_windows_core \
                 needs_windows_runner \
                 needs_windows_package \
-                needs_windows_desktop \
                 needs_macos \
-                needs_macos_desktop \
-                needs_frontend \
-                needs_desktop_frontend \
                 needs_plugin_sdk \
                 needs_docker \
-                needs_desktop_package \
                 needs_full_native; do
                 echo "$key=true"
               done
@@ -146,13 +136,11 @@ jobs:
         with:
           shared-key: linux-ci
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        if: needs.changes.outputs.needs_frontend == 'true' || needs.changes.outputs.needs_desktop_frontend == 'true' || needs.changes.outputs.needs_plugin_sdk == 'true'
+        if: needs.changes.outputs.needs_plugin_sdk == 'true'
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            frontend/package-lock.json
-            apps/desktop/package-lock.json
             npm/plugin-sdk/package-lock.json
             plugins/safe-delete/package-lock.json
             plugins/repo-info/package-lock.json
@@ -160,24 +148,6 @@ jobs:
             plugins/campus-application/package-lock.json
             plugins/agent-browser/package-lock.json
             plugins/agent-environment/package-lock.json
-      - name: Install frontend dependencies
-        if: needs.changes.outputs.needs_frontend == 'true' || needs.changes.outputs.needs_desktop_frontend == 'true'
-        run: npm ci --prefix frontend
-      - name: Check frontend contracts
-        if: needs.changes.outputs.needs_frontend == 'true'
-        run: |
-          npm --prefix frontend run typecheck
-          npm --prefix frontend test
-          npm --prefix frontend run check:dist
-      - name: Install Desktop frontend dependencies
-        if: needs.changes.outputs.needs_desktop_frontend == 'true'
-        run: npm ci --prefix apps/desktop
-      - name: Check Desktop frontend contracts
-        if: needs.changes.outputs.needs_desktop_frontend == 'true'
-        run: |
-          npm --prefix apps/desktop run typecheck
-          npm --prefix apps/desktop test
-          npm --prefix apps/desktop run build
       - name: Install Plugin SDK dependencies
         if: needs.changes.outputs.needs_plugin_sdk == 'true'
         run: |
@@ -339,8 +309,7 @@ jobs:
         with:
           shared-key: linux-ci
       # The retained npm release-smoke tooling below invokes node/npm directly.
-      # Frontend dependency installation and frontend-specific npm caching remain
-      # contract-lane responsibilities and are intentionally not repeated here.
+      # Retain the host continuation and Computer MCP contract checks.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -358,8 +327,14 @@ jobs:
         run: python3 -B -m unittest discover -s plugins/project-knowledge -p 'test_*.py' -v
       - name: Test configured model API ACP adapter
         run: python3 -m unittest discover -s integrations/model_gateway/tests -p 'test_*.py' -v
-      # Keep the cheap deterministic release gate ahead of the optional full
-      # workspace check so workflow/script drift is reported before a long Cargo pass.
+      - name: Check headless source layout
+        run: |
+          test ! -d frontend
+          test ! -d apps/desktop
+          test ! -f src/console_web.rs
+          test -f src/mcp_computer_app.html
+          test -f src/mcp_agent_continuation_app.html
+          test -f src/mcp_job_terminal_continuation_app.html
       - name: Test deterministic release contract and tooling
         run: bash scripts/release_check.sh --static-only
       - name: Check Linux workspace production surfaces without warnings
@@ -415,7 +390,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(node -p "require('./npm/webcodex/package.json').version")"
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
           {
             echo "WEBCODEX_CI_VERSION=$version"
             echo "WEBCODEX_CI_SOURCE_SHORT=$(git rev-parse --short=12 HEAD)"
@@ -455,11 +430,10 @@ jobs:
             test "$(id -u)" = 10001
             test "$(id -g)" = 10001
             test ! -e /usr/local/bin/webcodex-runner
+            test ! -e /usr/local/bin/webcodex
           '
           expected_server="webcodex-server $WEBCODEX_CI_VERSION (commit $WEBCODEX_CI_SOURCE_SHORT, dirty=false, built_at=$WEBCODEX_CI_BUILT_AT)"
-          expected_cli="webcodex $WEBCODEX_CI_VERSION (commit $WEBCODEX_CI_SOURCE_SHORT, dirty=false, built_at=$WEBCODEX_CI_BUILT_AT)"
           test "$(docker run --rm "$image" --version)" = "$expected_server"
-          test "$(docker run --rm --entrypoint /usr/local/bin/webcodex "$image" --version)" = "$expected_cli"
           name="webcodex-server-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; }
           trap cleanup EXIT
@@ -519,174 +493,25 @@ jobs:
       - name: Run native macOS Runner and Computer tests
         run: cargo test --locked -p webcodex-runner -p webcodex-lsp -p webcodex-computer --features runner-real-process-tests
 
-  test-macos-desktop:
-    needs: changes
-    if: needs.changes.outputs.needs_macos_desktop == 'true'
-    # Keep the common Apple-Silicon Desktop package validation path-aware. The
-    # corresponding Intel DMG build/smoke lives in extended-native CI.
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: darwin-arm64
-            runner: macos-15
-            host_arch: arm64
-            rust_host: aarch64-apple-darwin
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 75
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: macos-desktop-ci-${{ matrix.platform }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            frontend/package-lock.json
-            apps/desktop/package-lock.json
-      - name: Verify native macOS host
-        env:
-          EXPECTED_HOST_ARCH: ${{ matrix.host_arch }}
-          EXPECTED_RUST_HOST: ${{ matrix.rust_host }}
-        run: |
-          test "$(uname -m)" = "$EXPECTED_HOST_ARCH"
-          rust_host="$(rustc -vV | sed -n 's/^host: //p')"
-          test "$rust_host" = "$EXPECTED_RUST_HOST"
-      - name: Probe native DMG services before compiling Desktop
-        run: bash scripts/macos_finalize_dmg.sh --preflight
-      - name: Install shared frontend dependencies
-        run: npm ci --prefix frontend
-      - name: Install Desktop dependencies
-        run: npm ci --prefix apps/desktop
-      - name: Check Desktop frontend
-        run: |
-          npm --prefix apps/desktop run typecheck
-          npm --prefix apps/desktop test
-          npm --prefix apps/desktop run build
-      - name: Check Desktop Rust
-        run: |
-          cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
-          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
-      - name: Build exact native WebCodex runtime for Desktop
-        id: desktop_runtime
-        env:
-          EXPECTED_FILE_ARCH: ${{ matrix.host_arch }}
-        run: |
-          set -euo pipefail
-          source_sha="$(git rev-parse HEAD)"
-          short_source="$(git rev-parse --short=12 HEAD)"
-          version="$(node -p "require('./npm/webcodex/package.json').version")"
-          built_at="$(git show -s --format=%ct HEAD)"
-          export WEBCODEX_BUILT_AT="$built_at"
-          export WEBCODEX_GIT_COMMIT="$source_sha"
-          export WEBCODEX_GIT_DIRTY=false
-          cargo build --locked --profile dogfood -p webcodex -p webcodex-cli -p webcodex-runner
-          for name in webcodex webcodex-server webcodex-runner; do
-            binary="target/dogfood/$name"
-            actual="$($binary --version)"
-            expected="$name $version (commit $source_sha, dirty=false, built_at=$built_at)"
-            test "$actual" = "$expected"
-            test "$(/usr/bin/lipo -archs "$binary")" = "$EXPECTED_FILE_ARCH"
-          done
-          bash scripts/macos_sign_runner.sh target/dogfood/webcodex-runner -
-          {
-            echo "source=$source_sha"
-            echo "short=$short_source"
-            echo "version=$version"
-            echo "built_at=$built_at"
-          } >> "$GITHUB_OUTPUT"
-      - name: Stage exact runtime for native macOS Desktop
-        id: desktop_bundle
-        run: |
-          set -euo pipefail
-          stage="$RUNNER_TEMP/webcodex-desktop-${{ matrix.platform }}-bundle"
-          python3 scripts/prepare_desktop_bundle_macos.py \
-            --bin-dir target/dogfood \
-            --version "${{ steps.desktop_runtime.outputs.version }}" \
-            --source-sha "${{ steps.desktop_runtime.outputs.source }}" \
-            --built-at "${{ steps.desktop_runtime.outputs.built_at }}" \
-            --platform "${{ matrix.platform }}" \
-            --signing-mode adhoc \
-            --output-dir "$stage"
-          {
-            echo "config=$stage/tauri.bundle.conf.json"
-            echo "metadata=$stage/desktop-bundle.json"
-          } >> "$GITHUB_OUTPUT"
-      - name: Build native ad-hoc macOS Desktop DMG
-        id: desktop_dmg
-        working-directory: apps/desktop
-        env:
-          CI: "true"
-          APPLE_SIGNING_IDENTITY: "-"
-        run: |
-          set -euo pipefail
-          export CARGO_TARGET_DIR="$RUNNER_TEMP/webcodex-desktop-${{ matrix.platform }}-tauri"
-          npm exec tauri -- build \
-            --bundles dmg \
-            --config "${{ steps.desktop_bundle.outputs.config }}" \
-            --ci -- --locked
-          bundle_dir="$CARGO_TARGET_DIR/release/bundle/dmg"
-          shopt -s nullglob
-          candidates=("$bundle_dir"/*.dmg)
-          test "${#candidates[@]}" -eq 1
-          dmg="$RUNNER_TEMP/webcodex-desktop-ci-${{ steps.desktop_runtime.outputs.short }}-v${{ steps.desktop_runtime.outputs.version }}-${{ matrix.platform }}.dmg"
-          cp "${candidates[0]}" "$dmg"
-          echo "path=$dmg" >> "$GITHUB_OUTPUT"
-      - name: Smoke native macOS Desktop DMG
-        run: |
-          set -euo pipefail
-          bash scripts/desktop_install_macos_smoke.sh \
-            --dmg "${{ steps.desktop_dmg.outputs.path }}" \
-            --version "${{ steps.desktop_runtime.outputs.version }}" \
-            --source-sha "${{ steps.desktop_runtime.outputs.source }}" \
-            --built-at "${{ steps.desktop_runtime.outputs.built_at }}" \
-            --platform "${{ matrix.platform }}" \
-            --stage-metadata "${{ steps.desktop_bundle.outputs.metadata }}" \
-            --signing-mode adhoc
-
   test-macos:
-    needs: [contract, changes, test-macos-core, test-macos-desktop]
-    # Stable aggregate context: every configured macOS sublane must either succeed
-    # when required by policy or be intentionally skipped when not required.
-    # Workflow cancellation is distinct from needs.<lane>.result. Superseded
-    # runs stop; a required child failure/cancellation is still rejected below.
+    needs: [contract, changes, test-macos-core]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Validate macOS lane policy
+      - name: Validate macOS core lane
         env:
           CONTRACT_RESULT: ${{ needs.contract.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           NEEDS_CORE: ${{ needs.changes.outputs.needs_macos }}
-          NEEDS_DESKTOP: ${{ needs.changes.outputs.needs_macos_desktop }}
           CORE_RESULT: ${{ needs.test-macos-core.result }}
-          DESKTOP_RESULT: ${{ needs.test-macos-desktop.result }}
         run: |
           set -euo pipefail
-          echo "changes=$CHANGES_RESULT contract=$CONTRACT_RESULT core=$CORE_RESULT desktop=$DESKTOP_RESULT needs_core=$NEEDS_CORE needs_desktop=$NEEDS_DESKTOP"
-          if [ "$CHANGES_RESULT" != success ] || [ "$CONTRACT_RESULT" != success ]; then
-            echo "CI policy or contract classification did not succeed" >&2
-            exit 1
-          fi
-          require_lane() {
-            label="$1"
-            required="$2"
-            actual="$3"
-            expected=skipped
-            if [ "$required" = true ]; then expected=success; fi
-            if [ "$actual" != "$expected" ]; then
-              echo "$label macOS lane expected $expected, got $actual" >&2
-              exit 1
-            fi
-          }
-          require_lane core "$NEEDS_CORE" "$CORE_RESULT"
-          require_lane desktop "$NEEDS_DESKTOP" "$DESKTOP_RESULT"
+          test "$CONTRACT_RESULT" = success
+          test "$CHANGES_RESULT" = success
+          expected=skipped
+          if [ "$NEEDS_CORE" = true ]; then expected=success; fi
+          test "$CORE_RESULT" = "$expected"
 
   # Ordinary Runner/Computer fixtures must tolerate default libtest parallelism.
   # Timing-sensitive lifecycle/process-tree fixtures remain ignored here and run only
@@ -722,7 +547,7 @@ jobs:
           path: target/ci-build-reports/*.json
           retention-days: 7
       - name: Run Windows library and CLI tests
-        run: cargo test --locked -p webcodex-runner-config -p webcodex-process -p webcodex-cli
+        run: cargo test --locked -p webcodex-runner-config -p webcodex-process
       - name: Test user-session task ownership after Windows account normalization
         run: |
           & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -File scripts/tests/test_windows_user_service_identity.ps1
@@ -739,8 +564,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Computer helper ownership tests failed" }
           cargo test --locked -p webcodex-environment --lib windows_helper_task_scheduler_roundtrip_is_owned -- --ignored
           if ($LASTEXITCODE -ne 0) { throw "Computer helper Task Scheduler roundtrip failed" }
-      - name: Test Windows unified installer routing and Desktop build freshness
-        run: python -m unittest scripts.tests.test_prepare_windows_unified_installer scripts.tests.test_desktop_runtime_manifest scripts.tests.test_desktop_frontend_build
       - name: Test optional Codex observation adapter on Windows
         run: python -m unittest discover -s integrations/codex -p 'test_*.py' -v
       - name: Run Windows search fallback tests
@@ -780,177 +603,56 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: windows-package-ci
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-      - name: Test npm installer and release manifest natively
-        run: npm --prefix npm/webcodex test
-      - name: Windows artifact to npm install smoke
-        # Builds the three Windows binaries, packages the win32-x64 artifact
-        # with the native PowerShell script, installs it through the npm
-        # installer into a temporary prefix, and verifies the wrapper plus
-        # --version/--help and the failure-preserves-old-binaries path. Never
-        # touches the npm registry.
-        shell: pwsh
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/npm_install_windows_smoke.ps1
-
-  test-windows-desktop:
-    needs: changes
-    if: needs.changes.outputs.needs_windows_desktop == 'true'
-    runs-on: windows-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: windows-desktop-ci
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            frontend/package-lock.json
-            apps/desktop/package-lock.json
-      - name: Install shared frontend dependencies
-        run: npm ci --prefix frontend
-      - name: Install Desktop dependencies
-        run: npm ci --prefix apps/desktop
-      - name: Check Desktop frontend
-        run: |
-          npm --prefix apps/desktop run typecheck
-          npm --prefix apps/desktop test
-          npm --prefix apps/desktop run build
-      - name: Check Desktop Rust
-        shell: pwsh
-        run: |
-          cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
-          if ($LASTEXITCODE -ne 0) { throw "Desktop cargo check failed" }
-          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
-          if ($LASTEXITCODE -ne 0) { throw "Desktop cargo test failed" }
-      - name: Build exact local WebCodex runtime
-        id: runtime
+      - name: Verify two-binary Windows TOML runtime package
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $source = (git rev-parse HEAD).Trim()
-          $short = (git rev-parse --short=12 HEAD).Trim()
-          $version = (node -e "console.log(require('./npm/webcodex/package.json').version)").Trim()
-          $builtAt = [Int64]((git show -s --format=%ct HEAD).Trim())
-          $env:WEBCODEX_BUILT_AT = "$builtAt"
-          $env:WEBCODEX_GIT_COMMIT = $source
-          $env:WEBCODEX_GIT_DIRTY = "false"
-          cargo build --locked --profile dogfood -p webcodex -p webcodex-cli -p webcodex-runner
-          if ($LASTEXITCODE -ne 0) { throw "WebCodex runtime build failed" }
-          foreach ($name in @("webcodex", "webcodex-server", "webcodex-runner")) {
-            $binary = Join-Path "target\dogfood" "$name.exe"
-            $output = @(& $binary --version)
-            $exitCode = $LASTEXITCODE
-            if ($exitCode -ne 0 -or $output.Count -eq 0 -or -not $output[0]) {
-              throw "$name --version failed with exit code $exitCode"
-            }
-            $actual = $output[0].TrimEnd()
-            $expected = "$name $version (commit $source, dirty=false, built_at=$builtAt)"
-            if ($actual -ne $expected) { throw "Unexpected $name identity: $actual" }
+          cargo build --locked --bins -p webcodex -p webcodex-runner
+          if ($LASTEXITCODE -ne 0) { throw "backend build failed" }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' |
+            Select-Object -First 1).Matches.Groups[1].Value
+          & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package_release_artifact.ps1 `
+            -BinDir target/debug -OutDir target/windows-packages -Version $version `
+            -Platform win32-x64 -AllowDevelopmentBuild
+          if ($LASTEXITCODE -ne 0) { throw "two-binary packaging failed" }
+          $archive = "target/windows-packages/webcodex-v$version-win32-x64.tar.gz"
+          $members = @(tar -tf $archive)
+          $expected = @("webcodex-server.exe", "webcodex-runner.exe")
+          if (@(Compare-Object $expected $members).Count -gt 0) {
+            throw "unexpected Windows release archive members: $members"
           }
-          "source=$source" >> $env:GITHUB_OUTPUT
-          "short=$short" >> $env:GITHUB_OUTPUT
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "built_at=$builtAt" >> $env:GITHUB_OUTPUT
-      - name: Stage exact runtime for Desktop bundle
-        id: desktop_bundle
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $stage = Join-Path $env:RUNNER_TEMP "webcodex-desktop-ci-bundle"
-          & .\scripts\prepare_desktop_bundle.ps1 `
-            -BinDir "target\dogfood" `
-            -Version "${{ steps.runtime.outputs.version }}" `
-            -SourceSha "${{ steps.runtime.outputs.source }}" `
-            -BuiltAt ([Int64]"${{ steps.runtime.outputs.built_at }}") `
-            -OutputDir $stage
-          "config=$(Join-Path $stage 'tauri.bundle.conf.json')" >> $env:GITHUB_OUTPUT
-      - name: Build unsigned NSIS installer
-        working-directory: apps/desktop
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $env:CARGO_TARGET_DIR = Join-Path $env:GITHUB_WORKSPACE "target\desktop-ci-tauri"
-          npm exec tauri -- build --bundles nsis --config "${{ steps.desktop_bundle.outputs.config }}" --ci --no-sign
-          if ($LASTEXITCODE -ne 0) { throw "Tauri NSIS build failed" }
-          $bundleDir = Join-Path $env:CARGO_TARGET_DIR "release\bundle\nsis"
-          $built = @(Get-ChildItem -LiteralPath $bundleDir -Filter "*-setup.exe" -File)
-          if ($built.Count -ne 1) { throw "Expected exactly one NSIS installer, found $($built.Count)" }
-          New-Item -ItemType Directory -Force -Path "target\desktop-ci-dist" | Out-Null
-          $installer = Join-Path "target\desktop-ci-dist" "webcodex-desktop-ci-${{ steps.runtime.outputs.short }}-v${{ steps.runtime.outputs.version }}-win32-x64-setup.exe"
-          Copy-Item -LiteralPath $built[0].FullName -Destination $installer
-          "DESKTOP_CI_INSTALLER=$([System.IO.Path]::GetFullPath($installer))" >> $env:GITHUB_ENV
-      - name: Smoke newly-built Desktop installer
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          & .\scripts\desktop_install_windows_smoke.ps1 `
-            -Installer $env:DESKTOP_CI_INSTALLER `
-            -Version "${{ steps.runtime.outputs.version }}" `
-            -SourceSha "${{ steps.runtime.outputs.source }}" `
-            -BuiltAt ([Int64]"${{ steps.runtime.outputs.built_at }}") `
-            -Platform win32-x64
-
-          $customInstallDir = Join-Path $env:RUNNER_TEMP "WebCodex Custom Install"
-          & .\scripts\desktop_install_windows_smoke.ps1 `
-            -Installer $env:DESKTOP_CI_INSTALLER `
-            -Version "${{ steps.runtime.outputs.version }}" `
-            -SourceSha "${{ steps.runtime.outputs.source }}" `
-            -BuiltAt ([Int64]"${{ steps.runtime.outputs.built_at }}") `
-            -Platform win32-x64 `
-            -InstallDir $customInstallDir
 
   test-windows:
-    needs: [contract, changes, test-windows-core, test-windows-runner, test-windows-package, test-windows-desktop]
-    # Preserve the stable Windows aggregate while allowing each heavy lane to be
-    # selected independently by the deterministic path-risk classifier.
-    # Workflow cancellation is distinct from needs.<lane>.result. Superseded
-    # runs stop; a required child failure/cancellation is still rejected below.
+    needs: [contract, changes, test-windows-core, test-windows-runner, test-windows-package]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Validate Windows lane policy
+      - name: Validate Windows backend lanes
         env:
           CONTRACT_RESULT: ${{ needs.contract.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           NEEDS_CORE: ${{ needs.changes.outputs.needs_windows_core }}
           NEEDS_RUNNER: ${{ needs.changes.outputs.needs_windows_runner }}
           NEEDS_PACKAGE: ${{ needs.changes.outputs.needs_windows_package }}
-          NEEDS_DESKTOP: ${{ needs.changes.outputs.needs_windows_desktop }}
           CORE_RESULT: ${{ needs.test-windows-core.result }}
           RUNNER_RESULT: ${{ needs.test-windows-runner.result }}
           PACKAGE_RESULT: ${{ needs.test-windows-package.result }}
-          DESKTOP_RESULT: ${{ needs.test-windows-desktop.result }}
         run: |
           set -euo pipefail
-          echo "changes=$CHANGES_RESULT contract=$CONTRACT_RESULT core=$CORE_RESULT runner=$RUNNER_RESULT package=$PACKAGE_RESULT desktop=$DESKTOP_RESULT"
-          if [ "$CHANGES_RESULT" != success ] || [ "$CONTRACT_RESULT" != success ]; then
-            echo "CI policy or contract classification did not succeed" >&2
-            exit 1
-          fi
+          test "$CONTRACT_RESULT" = success
+          test "$CHANGES_RESULT" = success
           require_lane() {
-            label="$1"
-            required="$2"
-            actual="$3"
             expected=skipped
-            if [ "$required" = true ]; then expected=success; fi
-            if [ "$actual" != "$expected" ]; then
-              echo "$label Windows lane expected $expected, got $actual" >&2
+            if [ "$2" = true ]; then expected=success; fi
+            if [ "$3" != "$expected" ]; then
+              echo "$1 expected $expected, got $3" >&2
               exit 1
             fi
           }
           require_lane core "$NEEDS_CORE" "$CORE_RESULT"
           require_lane runner "$NEEDS_RUNNER" "$RUNNER_RESULT"
           require_lane package "$NEEDS_PACKAGE" "$PACKAGE_RESULT"
-          require_lane desktop "$NEEDS_DESKTOP" "$DESKTOP_RESULT"
 
   test-native:
     needs: [contract, changes, mcp-conformance, test-docker-server, test-macos, test-windows]

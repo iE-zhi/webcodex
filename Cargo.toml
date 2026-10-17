@@ -6,7 +6,6 @@ members = [
     "crates/webcodex-computer",
     "crates/webcodex-code-mode",
     "crates/webcodex-runner-config",
-    "crates/webcodex-cli",
     "crates/webcodex-core",
     "crates/webcodex-environment",
     "crates/webcodex-lsp",
@@ -55,7 +54,6 @@ path = "src/bin/webcodex-server.rs"
 
 [dependencies]
 webcodex-openai-tunnel = { path = "crates/webcodex-openai-tunnel", version = "0.1.0", default-features = false }
-webcodex-admin = { path = "crates/webcodex-admin" }
 webcodex-build-info = { path = "crates/webcodex-build-info" }
 webcodex-code-mode = { path = "crates/webcodex-code-mode", optional = true }
 webcodex-runner-config = { path = "crates/webcodex-runner-config" }
@@ -93,7 +91,6 @@ url = "2"
 sha2 = "0.10"
 tempfile = "3"
 zstd = "0.13"
-zip = { version = "2", default-features = false, features = ["deflate"] }
 unicase = "2.9"
 # Custom QUIC agent transport. Quinn reuses the
 # rustls 0.23 + aws-lc-rs provider already present transitively (via
@@ -147,6 +144,7 @@ codegen-units = 16
 incremental = true
 
 [dev-dependencies]
+webcodex-admin = { path = "crates/webcodex-admin" }
 tokio = { version = "1", features = ["test-util"] }
 webcodex-runner-registry = { path = "crates/webcodex-runner-registry", features = ["root-test-support"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }

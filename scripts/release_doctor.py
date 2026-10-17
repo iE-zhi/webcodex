@@ -30,9 +30,7 @@ EXPECTED_PLATFORMS = (
     "win32-x64",
     "win32-arm64",
 )
-EXPECTED_DESKTOP_PLATFORMS = ("darwin-arm64", "win32-x64", "win32-arm64")
-EXPECTED_SUPPLEMENTAL_DESKTOP_PLATFORMS = ("darwin-x64",)
-REQUIRED_TOOLS = ("git", "gh", "npm", "node", "python3", "bash")
+REQUIRED_TOOLS = ("git", "gh", "python3", "bash")
 
 
 class DoctorError(RuntimeError):
@@ -60,30 +58,11 @@ def _platform_contract(root: Path) -> str:
         raise DoctorError(
             f"collector platform contract drift: expected={EXPECTED_PLATFORMS} actual={tuple(collector.PLATFORMS)}"
         )
-    if tuple(collector.DESKTOP_PLATFORMS) != EXPECTED_DESKTOP_PLATFORMS:
-        raise DoctorError(
-            f"primary Desktop release platform contract drift: actual={tuple(collector.DESKTOP_PLATFORMS)}"
-        )
-    if tuple(collector.SUPPLEMENTAL_DESKTOP_PLATFORMS) != EXPECTED_SUPPLEMENTAL_DESKTOP_PLATFORMS:
-        raise DoctorError(
-            "supplemental Desktop release platform contract drift: "
-            f"actual={tuple(collector.SUPPLEMENTAL_DESKTOP_PLATFORMS)}"
-        )
-    manifest_path = root / "npm/webcodex/manifest.example.json"
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise DoctorError("npm manifest.example.json is unreadable") from exc
-    artifacts = manifest.get("artifacts")
-    if not isinstance(artifacts, dict) or tuple(artifacts) != EXPECTED_PLATFORMS:
-        raise DoctorError(
-            f"npm manifest platform contract drift: expected={EXPECTED_PLATFORMS} actual={tuple(artifacts) if isinstance(artifacts, dict) else None}"
-        )
-    return (
-        "six-platform npm runtime contract plus primary Desktop "
-        f"{', '.join(EXPECTED_DESKTOP_PLATFORMS)} and supplemental Desktop "
-        f"{', '.join(EXPECTED_SUPPLEMENTAL_DESKTOP_PLATFORMS)}: {', '.join(EXPECTED_PLATFORMS)}"
-    )
+    if tuple(collector.BINARIES) != ("webcodex-server", "webcodex-runner"):
+        raise DoctorError("headless release must contain only Server and Runner binaries")
+    if (root / "crates/webcodex-cli").exists() or (root / "npm/webcodex").exists():
+        raise DoctorError("standalone WebCodex CLI package unexpectedly present")
+    return "six-platform two-binary Server/Runner runtime contract: " + ", ".join(EXPECTED_PLATFORMS)
 
 
 def _version_contract(root: Path, version: str) -> str:
@@ -92,30 +71,23 @@ def _version_contract(root: Path, version: str) -> str:
     if mismatches:
         detail = " ".join(f"{name}={value}" for name, value in versions.items())
         raise DoctorError(f"canonical release version mismatch: requested={version} {detail}")
-    return "Cargo, npm, Desktop package, Desktop Cargo, and Tauri app versions match"
+    return "Rust workspace release version matches"
 
 
 def _workflow_contract(root: Path) -> str:
+    """Verify the current headless release workflow still builds all native runtimes."""
     ci = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     extended = (root / ".github/workflows/extended-native.yml").read_text(encoding="utf-8")
-    readiness_workflow = (root / ".github/workflows/release-readiness.yml").read_text(encoding="utf-8")
+    readiness = (root / ".github/workflows/release-readiness.yml").read_text(encoding="utf-8")
     build = (root / ".github/workflows/release-build.yml").read_text(encoding="utf-8")
-    intel_desktop = (root / ".github/workflows/release-desktop-darwin-x64.yml").read_text(encoding="utf-8")
-    release_image = (root / ".github/workflows/release-image.yml").read_text(encoding="utf-8")
-    download_page = (root / ".github/workflows/download-page.yml").read_text(encoding="utf-8")
+    image = (root / ".github/workflows/release-image.yml").read_text(encoding="utf-8")
     required = {
         "ci.yml": (
-            ("apps/desktop/package-lock.json", ci),
-            ("test-windows-desktop:", ci),
-            ("DESKTOP_RESULT", ci),
-            ("prepare_desktop_bundle.ps1", ci),
-            ("desktop_install_windows_smoke.ps1", ci),
-            ("prepare_desktop_bundle_macos.py", ci),
-            ("desktop_install_macos_smoke.sh", ci),
-            ("darwin-arm64", ci),
             ("test-docker-server:", ci),
             ("needs_docker", ci),
-            ("linux/amd64", ci),
+            ("test-macos-core:", ci),
+            ("test-windows-runner:", ci),
+            ("cargo fmt --all -- --check", ci),
             ("'release/**'", ci),
         ),
         "extended-native.yml": (
@@ -124,115 +96,46 @@ def _workflow_contract(root: Path) -> str:
             ("ubuntu-24.04-arm", extended),
             ("macos-15-intel", extended),
             ("windows-11-arm", extended),
-            ("darwin-x64", extended),
-            ("win32-arm64", extended),
-            ("prepare_desktop_bundle.ps1", extended),
-            ("desktop_install_windows_smoke.ps1", extended),
-            ("prepare_desktop_bundle_macos.py", extended),
-            ("desktop_install_macos_smoke.sh", extended),
+            ("webcodex-computer", extended),
         ),
         "release-readiness.yml": (
-            ("ci_run_id", readiness_workflow),
-            ("evidence_run_id", readiness_workflow),
-            ("- 'release/v*'", readiness_workflow),
-            ("source_ref:", readiness_workflow),
-            ('refs/heads/$INPUT_SOURCE_REF', readiness_workflow),
-            ("uses: ./.github/workflows/extended-native.yml", readiness_workflow),
-            ("if: github.event_name == 'push' || inputs.source_ref == 'main'", readiness_workflow),
-            ("linux/amd64", readiness_workflow),
-            ("linux/arm64", readiness_workflow),
+            ("source_ref:", readiness),
+            ("ci_run_id", readiness),
+            ("evidence_run_id", readiness),
+            ("uses: ./.github/workflows/extended-native.yml", readiness),
         ),
-        "release-build.yml": tuple((platform, build) for platform in EXPECTED_PLATFORMS)
-        + (
-            ("macos-15-intel", build),
-            ("windows-11-arm", build),
-            ("ubuntu-24.04-arm", build),
-            ("prepare_desktop_bundle.ps1", build),
-            ("desktop_install_windows_smoke.ps1", build),
-            ("prepare_desktop_bundle_macos.py", build),
-            ("desktop_install_macos_smoke.sh", build),
+        "release-build.yml": (
+            ("refs/tags/$tag", build),
+            ("scripts/release_check.sh --static-only", build),
+            ("macos_sign_runner.sh", build),
+            ("quay.io/pypa/manylinux2014_", build),
+            ("-p webcodex -p webcodex-runner", build),
             ("desktop_artifacts", build),
-            ('refs/tags/$tag', build),
-            ("webcodex-desktop-v$env:VERSION-$env:WEBCODEX_RELEASE_PLATFORM-setup.exe", build),
-            ("webcodex-desktop-v$VERSION-$WEBCODEX_RELEASE_PLATFORM.dmg", build),
-            ('desktop_dist="$GITHUB_WORKSPACE/dist"', build),
-            ('$installerPath = Join-Path $desktopDist $installerName', build),
-            ("DESKTOP_INSTALLER_PATH=$installerPath", build),
-            ('--dmg "${{ steps.desktop_dmg.outputs.path }}"', build),
-            ("-Installer $env:DESKTOP_INSTALLER_PATH", build),
-            ("dist/webcodex-desktop-*.dmg", build),
-            ("dist/webcodex-desktop-*-${{ matrix.platform }}-setup.exe", build),
-            ('bash scripts/macos_sign_runner.sh target/release/webcodex-runner "$APPLE_SIGNING_IDENTITY" "$WEBCODEX_MACOS_SIGNING_MODE"', build),
-            ("macos_finalize_desktop.sh", build),
-            ("macos_ci_signing_setup.sh", build),
-            ("macos_finalize_dmg.sh", build),
-            ("public release requires persistent signing identity", build),
-            ('expected_notarized = expected_signing == "developer-id"', build),
-            ("  preflight:", build),
-            ("Fail fast on deterministic release contracts", build),
-            ("bash scripts/release_check.sh --static-only", build),
-            ("include_unified_installers:", build),
-            ("if: inputs.include_unified_installers", build),
-            ("!inputs.include_unified_installers || needs.unified-native.result == 'success'", build),
-            ("export CARGO_TARGET_DIR=/work/target", build),
-            ('export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"', build),
-            ('desktop="$CARGO_TARGET_DIR/release/webcodex-desktop"', build),
-        ),
-        "release-desktop-darwin-x64.yml": (
-            ("types: [published]", intel_desktop),
-            ("workflow_dispatch:", intel_desktop),
-            ("macos-15-intel", intel_desktop),
-            ("contents: write", intel_desktop),
-            ("webcodex-v$VERSION-$PLATFORM.tar.gz", intel_desktop),
-            ("SHA256SUMS", intel_desktop),
-            ("gh release upload", intel_desktop),
-            ("desktop_install_macos_smoke.sh", intel_desktop),
-            ("desktop_install_macos_smoke.sh", intel_desktop),
-            ("macos_ci_signing_setup.sh", intel_desktop),
-            ("macos_finalize_dmg.sh", intel_desktop),
-            ("Treat an already-published DMG as immutable authority", intel_desktop),
-            ("--build-info-json", intel_desktop),
-            ("source_sha.startswith(commit)", intel_desktop),
-            ("immutable runtime binaries disagree on commit identity", intel_desktop),
-        ),
+            ("verify_bundle_directory", build),
+        ) + tuple((platform, build) for platform in EXPECTED_PLATFORMS),
         "release-image.yml": (
-            ("WEBCODEX_GIT_COMMIT=${{ needs.resolve.outputs.source_short }}", release_image),
-            ("--build-info-json", release_image),
-            ("source_sha.startswith(commit)", release_image),
-        ),
-        "download-page.yml": (
-            ("Resolve optional installer manifest", download_page),
-            ('echo "has_installers=false" >> "$GITHUB_OUTPUT"', download_page),
-            ("if: steps.manifest.outputs.has_installers == 'true'", download_page),
+            ("WEBCODEX_GIT_COMMIT=", image),
+            ("--build-info-json", image),
         ),
     }
-    missing = []
-    for filename, tokens in required.items():
-        for token, body in tokens:
-            if token not in body:
-                missing.append(f"{filename}:{token}")
+    missing = [
+        f"{name}:{token}"
+        for name, tokens in required.items()
+        for token, contents in tokens
+        if token not in contents
+    ]
     if missing:
-        raise DoctorError(f"release workflow contract is missing: {', '.join(missing)}")
+        raise DoctorError("headless workflow contract is missing: " + ", ".join(missing))
+    for name, contents in (("CI", ci), ("extended native", extended), ("release build", build)):
+        if any(token in contents for token in ("working-directory: apps/desktop", "frontend/package-lock.json", "npm ci --prefix frontend", "npm ci --prefix apps/desktop", "tauri build")):
+            raise DoctorError(f"{name} workflow still depends on removed desktop UI")
     forbidden_daily = ("macos-15-intel", "windows-11-arm", "ubuntu-24.04-arm", "test-windows-arm64:", "test-linux-arm64:")
-    leaked = [token for token in forbidden_daily if token in ci]
-    if leaked:
-        raise DoctorError(f"ordinary CI regained extended-native lanes: {', '.join(leaked)}")
-    if "packages: write" in readiness_workflow or "actions/upload-artifact" in readiness_workflow:
-        raise DoctorError("release-readiness gained publication/upload authority")
-    if "prepare_desktop_bundle.ps1" in readiness_workflow or "tauri" in readiness_workflow.lower():
-        raise DoctorError("release-readiness gained Desktop candidate build responsibility")
-    apple_secret_surfaces = {
-        "ci.yml": ci,
-        "extended-native.yml": extended,
-        "release-readiness.yml": readiness_workflow,
-    }
-    leaked_apple_secrets = [name for name, body in apple_secret_surfaces.items() if "secrets.APPLE_" in body]
-    if leaked_apple_secrets:
-        raise DoctorError(
-            "disposable CI unexpectedly depends on Apple release-signing credentials: "
-            + ", ".join(leaked_apple_secrets)
-        )
-    return "main/release-branch CI, precomputed release-source evidence, persistent macOS release signing, and tag-bound authoritative build contracts are consistent"
+    if any(token in ci for token in forbidden_daily):
+        raise DoctorError("extended-native host unexpectedly moved into daily CI")
+    if "packages: write" in readiness or "actions/upload-artifact" in readiness:
+        raise DoctorError("release readiness unexpectedly gained publication authority")
+    return "six-platform authoritative build, native Computer/Runner checks, and release-source evidence agree"
+
 
 
 def _compile_verifiers(root: Path) -> str:
@@ -264,7 +167,6 @@ def _actionlint(root: Path) -> str:
             str(root / ".github/workflows/release-readiness.yml"),
             str(root / ".github/workflows/release-build.yml"),
             str(root / ".github/workflows/release-image.yml"),
-            str(root / ".github/workflows/release-desktop-darwin-x64.yml"),
         ],
         cwd=root,
         stdout=subprocess.PIPE,

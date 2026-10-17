@@ -18,7 +18,6 @@ providers = [
 ]
 
 [forbidden_external_dependencies]
-webcodex-cli = ["quinn", "rusqlite", "salvo"]
 webcodex-core = ["quinn", "rusqlite", "salvo"]
 webcodex-runner = ["rusqlite", "salvo"]
 
@@ -76,22 +75,6 @@ test_support = []
 layer = "domain"
 role = "First-class bounded CDP browser runtime built on process lifecycle primitives."
 normal = ["webcodex-core", "webcodex-process", "webcodex-runner-config"]
-dev = []
-build = []
-test_support = []
-
-[packages.webcodex-cli]
-layer = "entrypoint"
-role = "User-facing CLI entrypoint over server composition and shared setup helpers."
-normal = [
-    "webcodex",
-    "webcodex-admin",
-    "webcodex-build-info",
-    "webcodex-core",
-    "webcodex-environment",
-    "webcodex-process",
-    "webcodex-runner-config",
-]
 dev = []
 build = []
 test_support = []

@@ -145,4 +145,4 @@ loading, cache limits, duplicate delivery, version changes, cancellation on
 replacement/invalid selection, and teardown during transfer. It blocks external
 network fetches. Screenshots and the result report are local ignored artifacts
 under `artifacts/pdf-reader/`; it does not exercise a real MCP Host or native
-Server/Runner authority. See [UI smoke instructions](../../scripts/ui-smoke/README.md).
+Server/Runner authority. The legacy UI smoke harness is not shipped with the headless runtime.

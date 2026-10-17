@@ -1,0 +1,22 @@
+# WebCodex Server (headless). Paths are examples; replace with actual absolute paths.
+[server]
+addr = "127.0.0.1:8080"
+data_dir = "/var/lib/webcodex"
+token_file = "/etc/webcodex/secrets/server-token"
+public_url = "https://webcodex.example.com"
+
+[runners]
+bindings_file = "/etc/webcodex/runner-bindings.toml"
+
+# Optional OpenAI Secure MCP Tunnel hosted INSIDE Server (no third service).
+# Remove the entire section if not using the OpenAI tunnel.
+[tunnel]
+profile_id = "main"
+tunnel_id = "tunnel_0123456789abcdef0123456789abcdef"
+api_key_file = "/etc/webcodex/secrets/openai-control-plane-key"
+autostart = true
+readiness_path = "/var/lib/webcodex/tunnel-readiness.json"
+
+# Optional advanced Server settings, backed by the existing runtime semantics.
+[options]
+WEBCODEX_MCP_COMPACT_SCHEMAS = true

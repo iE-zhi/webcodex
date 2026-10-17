@@ -2,7 +2,7 @@
 //! the business arguments and runtime authorization remain separate.
 use super::{
     is_host_continuation_app_tool_name, stateless_window_reply_supported, ToolInvocationMetadata,
-    ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME, WORK_RESULT_THREAD_ENTRYPOINT_TOOL_NAME,
+    ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME,
 };
 use serde_json::Value;
 
@@ -22,8 +22,7 @@ pub(super) fn mcp_invocation_envelope_supported_fields(tool: &str) -> Vec<&'stat
             | "read_app_artifact_chunk"
             | "read_changed_file_diff"
             | "search_mentions"
-    ) || tool == WORK_RESULT_THREAD_ENTRYPOINT_TOOL_NAME
-        || is_host_continuation_app_tool_name(tool)
+    ) || is_host_continuation_app_tool_name(tool)
     {
         return Vec::new();
     }

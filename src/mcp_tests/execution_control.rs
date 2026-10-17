@@ -291,24 +291,6 @@ async fn execution_control_manifest_keeps_business_arguments_canonical() {
 }
 
 #[test]
-fn execution_control_preserves_bounded_app_metadata_before_split() {
-    let mut result = crate::tool_runtime::ToolResult::ok(json!({"items":[{
-        "job_id":"job-1","status":"completed","terminal":true,"exit_code":0,
-        "stdout_tail":"PRIVATE LOG","execution":{"state":"completed","outcome":"passed","exit_code":0,"job_id":"job-1"}
-    }]}));
-    let projection =
-        crate::mcp::presentation::result_app_presentation("observe_jobs", &result.output).unwrap();
-    crate::mcp::execution_control::project_result(&mut result);
-    let mut rendered = json!({"structuredContent":{"output":result.output},"_meta":{"keep":true}});
-    crate::mcp::presentation::attach_presentation(&mut rendered, projection);
-    let app = &rendered["_meta"]["webcodex/presentation"];
-    assert_eq!(app["items"][0]["job_id"], "job-1");
-    assert_eq!(app["items"][0]["status"], "completed");
-    assert!(!app.to_string().contains("PRIVATE"));
-    assert_eq!(rendered["_meta"]["keep"], true);
-}
-
-#[test]
 fn execution_control_budget_falls_back_without_losing_synchronous_output() {
     use crate::json_measurement::serialized_json_len;
     let limit = webcodex_core::runtime_contract::MODEL_INSPECTION_MAX_RESULT_BYTES;

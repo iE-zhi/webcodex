@@ -49,12 +49,8 @@ class Risk:
     needs_windows_core: bool = False
     needs_windows_runner: bool = False
     needs_windows_package: bool = False
-    needs_windows_desktop: bool = False
     needs_macos: bool = False
-    needs_macos_desktop: bool = False
     needs_docker: bool = False
-    needs_frontend: bool = False
-    needs_desktop_frontend: bool = False
     needs_plugin_sdk: bool = False
     needs_full_native: bool = False
     categories: set[str] = field(default_factory=set)
@@ -71,26 +67,18 @@ class Risk:
             self.needs_windows_core = True
             self.needs_windows_runner = True
             self.needs_windows_package = True
-            self.needs_windows_desktop = True
             self.needs_macos = True
-            self.needs_macos_desktop = True
             self.needs_docker = True
-            self.needs_frontend = True
-            self.needs_desktop_frontend = True
             self.needs_plugin_sdk = True
         return self
 
     def outputs(self) -> dict[str, str]:
         self.finalize()
-        needs_windows = any(
-            (
-                self.needs_windows_core,
-                self.needs_windows_runner,
-                self.needs_windows_package,
-                self.needs_windows_desktop,
-            )
-        )
-        needs_desktop_package = self.needs_windows_desktop or self.needs_macos_desktop
+        needs_windows = any((
+            self.needs_windows_core,
+            self.needs_windows_runner,
+            self.needs_windows_package,
+        ))
         categories = ",".join(sorted(self.categories)) or "no-changes"
         reason_prefix = "full-native" if self.needs_full_native else "path-risk"
         return {
@@ -98,14 +86,9 @@ class Risk:
             "needs_windows_core": _bool(self.needs_windows_core),
             "needs_windows_runner": _bool(self.needs_windows_runner),
             "needs_windows_package": _bool(self.needs_windows_package),
-            "needs_windows_desktop": _bool(self.needs_windows_desktop),
             "needs_macos": _bool(self.needs_macos),
-            "needs_macos_desktop": _bool(self.needs_macos_desktop),
             "needs_docker": _bool(self.needs_docker),
-            "needs_frontend": _bool(self.needs_frontend),
-            "needs_desktop_frontend": _bool(self.needs_desktop_frontend),
             "needs_plugin_sdk": _bool(self.needs_plugin_sdk),
-            "needs_desktop_package": _bool(needs_desktop_package),
             "needs_full_native": _bool(self.needs_full_native),
             "categories": categories,
             "reason": f"{reason_prefix}:{categories}",
@@ -132,15 +115,8 @@ def _mark_windows_package(risk: Risk, category: str) -> None:
     risk.categories.add(category)
 
 
-def _mark_windows_desktop(risk: Risk, category: str) -> None:
-    risk.needs_windows_desktop = True
-    risk.categories.add(category)
-
-
-def _mark_macos(risk: Risk, category: str, *, desktop: bool = False) -> None:
+def _mark_macos(risk: Risk, category: str) -> None:
     risk.needs_macos = True
-    if desktop:
-        risk.needs_macos_desktop = True
     risk.categories.add(category)
 
 
@@ -154,28 +130,6 @@ def _mark_platform_context_bounded(risk: Risk) -> None:
 def _is_docs_or_text(path: str) -> bool:
     return path.startswith("docs/") or path in {"README.md", "CHANGELOG.md", "LICENSE"}
 
-
-def _is_main_frontend(path: str) -> bool:
-    return path.startswith("frontend/")
-
-
-def _is_desktop_shared_frontend(path: str) -> bool:
-    return path.startswith("frontend/src/ui/") or path in {
-        "frontend/package.json",
-        "frontend/package-lock.json",
-    }
-
-
-def _is_desktop_frontend(path: str) -> bool:
-    return path.startswith("apps/desktop/src/") or path in {
-        "apps/desktop/index.html",
-        "apps/desktop/tsconfig.json",
-        "apps/desktop/vite.config.ts",
-    }
-
-
-def _is_frontend_only(path: str) -> bool:
-    return _is_main_frontend(path) or _is_desktop_frontend(path)
 
 
 def _is_docker_surface(path: str) -> bool:
@@ -206,10 +160,6 @@ def _release_tooling(path: str) -> bool:
             "macos_ci_developer_id_setup.sh",
             "macos_ci_signing_setup.sh",
             "macos_sign_self_signed.sh",
-            "macos_finalize_desktop.sh",
-            "macos_finalize_dmg.sh",
-            "macos_sign_runner.sh",
-            "verify_macos_desktop_identity.sh",
         }
     )
 
@@ -246,18 +196,6 @@ def _classify_path(risk: Risk, path: str) -> None:
     if _is_docs_or_text(path):
         risk.categories.add("docs")
         return
-    if _is_main_frontend(path):
-        risk.needs_frontend = True
-        risk.categories.add("frontend")
-        if _is_desktop_shared_frontend(path):
-            risk.needs_desktop_frontend = True
-            risk.categories.add("desktop-shared-ui")
-        return
-    if _is_desktop_frontend(path):
-        risk.needs_desktop_frontend = True
-        risk.categories.add("desktop-frontend")
-        return
-
     if _is_docker_surface(path):
         risk.needs_docker = True
         risk.categories.add("server-container")
@@ -280,15 +218,6 @@ def _classify_path(risk: Risk, path: str) -> None:
         risk.categories.add("native-build-script")
         return
 
-    if path.startswith("apps/desktop/src-tauri/"):
-        _mark_windows_desktop(risk, "desktop-native")
-        _mark_macos(risk, "desktop-native", desktop=True)
-        return
-    if path in {"apps/desktop/package.json", "apps/desktop/package-lock.json"}:
-        risk.needs_desktop_frontend = True
-        _mark_windows_desktop(risk, "desktop-package")
-        _mark_macos(risk, "desktop-package", desktop=True)
-        return
 
     # The npm installer/wrapper contains real Windows-specific process/path
     # behavior. Linux tooling exercises its portable contract, but production
@@ -298,22 +227,8 @@ def _classify_path(risk: Risk, path: str) -> None:
         _mark_windows_package(risk, "npm-package")
         return
 
-    if path in {
-        "scripts/prepare_desktop_bundle.ps1",
-        "scripts/desktop_install_windows_smoke.ps1",
-    }:
-        _mark_windows_desktop(risk, "windows-desktop-package")
-        if path == "scripts/desktop_install_windows_smoke.ps1":
-            _mark_windows_package(risk, "windows-package")
-        return
     if path == "scripts/npm_install_windows_smoke.ps1":
         _mark_windows_package(risk, "windows-package")
-        return
-    if path in {
-        "scripts/prepare_desktop_bundle_macos.py",
-        "scripts/desktop_install_macos_smoke.sh",
-    }:
-        _mark_macos(risk, "macos-desktop-package", desktop=True)
         return
 
     signing_tokens = {"sign", "signing", "codesign", "notarize", "notarization"}
@@ -329,12 +244,11 @@ def _classify_path(risk: Risk, path: str) -> None:
         packaging_tokens & tokens and windows_package_tokens & tokens
     ):
         _mark_windows_package(risk, "windows-package")
-        _mark_windows_desktop(risk, "windows-desktop-package")
         return
     if suffix in {".dmg", ".pkg"} or (
         packaging_tokens & tokens and macos_package_tokens & tokens
     ):
-        _mark_macos(risk, "macos-desktop-package", desktop=True)
+        _mark_macos(risk, "macos-package")
         return
     if packaging_tokens & tokens:
         risk.needs_full_native = True
@@ -511,7 +425,6 @@ def _platform_context_paths(changes: list[Change], *, excluded_status: str) -> l
             if change.status != excluded_status
             and (change.path.endswith(".rs") or PurePosixPath(change.path).name == "Cargo.toml")
             and not _is_docs_or_text(change.path)
-            and not _is_frontend_only(change.path)
         }
     )
 
@@ -580,8 +493,8 @@ def classify_git_range(base: str, head: str) -> Risk:
     try:
         platform_context = _git_platform_context(base, head, changes)
     except DiffLimitExceeded:
-        # We still know the exact changed paths, so preserve their package/desktop
-        # classification and fail closed only for unknown native cfg/architecture
+        # We still know the exact changed paths, so preserve package classification
+        # and fail closed only for unknown native cfg/architecture
         # semantics. Packaging lanes are not a substitute for platform compilation.
         risk = classify_changes(changes)
         _mark_platform_context_bounded(risk)

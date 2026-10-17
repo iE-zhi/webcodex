@@ -82,7 +82,6 @@ pub(crate) struct ProjectCommandOptions {
     pub profile: String,
     pub state_dir: Option<PathBuf>,
     pub json: bool,
-    pub console_assets_dir: Option<PathBuf>,
 }
 
 impl ProjectCommandOptions {
@@ -92,7 +91,6 @@ impl ProjectCommandOptions {
             profile: DEFAULT_PROFILE.to_string(),
             state_dir: None,
             json: false,
-            console_assets_dir: None,
         })
     }
 }
@@ -215,15 +213,6 @@ pub(crate) fn parse_options(
             "--profile" => options.profile = value(&mut index)?,
             "--state-dir" => options.state_dir = Some(PathBuf::from(value(&mut index)?)),
             "--json" if command != "run" => options.json = true,
-            "--console-assets-dir" if command == "run" => {
-                let directory = PathBuf::from(value(&mut index)?);
-                if !directory.is_absolute() {
-                    return Err(
-                        "--console-assets-dir requires an absolute directory path".to_string()
-                    );
-                }
-                options.console_assets_dir = Some(directory);
-            }
             "--help" | "-h" => return Err("help requested".to_string()),
             _ => return Err(format!("unknown {command} option '{flag}'")),
         }
@@ -242,7 +231,7 @@ pub(crate) fn usage() -> &'static str {
        webcodex doctor [--root PATH] [--profile NAME] [--state-dir PATH] [--json]\n\
        webcodex setup [--root PATH] [--profile NAME] [--state-dir PATH] [--json]\n\
        webcodex run [--root PATH] [--profile NAME] [--state-dir PATH]\n\
-                              [--console-assets-dir ABSOLUTE_PATH]\n\n\
+         \n\n\
 `share` is the Quick Trial path: it temporarily shares this one project for ChatGPT/remote MCP,\n\
 starts a local Server + Runner for the foreground lifetime, and ends when the command exits.\n\
 For full daily use, configure the regular WebCodex Server + Runner flow instead. The default\n\
@@ -705,7 +694,6 @@ pub(super) struct LocalRuntimeHandle {
     pub(super) project_name: String,
     pub(super) local_url: String,
     pub(super) public_url: String,
-    pub(super) console_assets_dir: Option<PathBuf>,
     server: Child,
     runner: Child,
 }
@@ -769,7 +757,6 @@ pub(super) async fn start_local_runtime(
     options: &ProjectCommandOptions,
     runtime_options: LocalRuntimeOptions,
 ) -> Result<LocalRuntimeHandle, ProductError> {
-    let console_assets_dir = resolve_console_assets_directory(options)?;
     let (config, paths) = configured_project(options)?;
     prepare_runtime_private_state(&paths)?;
     ensure_local_runtime_port_available(config.port, runtime_options.port_conflict_action)?;
@@ -866,7 +853,6 @@ pub(super) async fn start_local_runtime(
             .env_remove("WEBCODEX_OAUTH2_PROJECT_SHARE_GRANT_ID")
             .env_remove("WEBCODEX_OAUTH2_PROJECT_SHARE_SESSION_ID");
     }
-    configure_console_assets_environment(&mut server_command, console_assets_dir.as_deref());
     let mut server = server_command.spawn().map_err(|_| {
         ProductError::new(
             "server_unreachable",
@@ -931,7 +917,6 @@ pub(super) async fn start_local_runtime(
         project_name: config.project_name,
         local_url,
         public_url,
-        console_assets_dir,
         server,
         runner,
     })
@@ -939,22 +924,10 @@ pub(super) async fn start_local_runtime(
 
 pub(crate) async fn start_runner(options: &ProjectCommandOptions) -> Result<(), ProductError> {
     let mut runtime = start_local_runtime(options, LocalRuntimeOptions::default()).await?;
-    let mut started = format!(
-        "Project: {}\nConnection: connected at {}\nConsole: {}/runtime\nConsole assets: {}",
-        runtime.project_name,
-        runtime.local_url,
-        runtime.local_url,
-        if runtime.console_assets_dir.is_some() {
-            "local development"
-        } else {
-            "embedded"
-        }
+    println!(
+        "Project: {}\nConnection: connected at {}\nRunner: online\nCoding access: ready\n\nPress Ctrl-C to stop.",
+        runtime.project_name, runtime.local_url
     );
-    if let Some(directory) = &runtime.console_assets_dir {
-        started.push_str(&format!("\nAssets directory: {}", directory.display()));
-    }
-    started.push_str("\nRunner: online\nCoding access: ready\n\nPress Ctrl-C to stop.");
-    println!("{started}");
     let outcome = tokio::select! {
         _ = wait_for_local_runtime_stop_signal() => Ok(()),
         result = runtime.wait_for_exit() => result,
@@ -980,30 +953,6 @@ async fn wait_for_local_runtime_stop_signal() {
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {},
         _ = ctrl_break.recv() => {},
-    }
-}
-
-fn resolve_console_assets_directory(
-    options: &ProjectCommandOptions,
-) -> Result<Option<PathBuf>, ProductError> {
-    let Some(directory) = options.console_assets_dir.as_deref() else {
-        return Ok(None);
-    };
-    let source =
-        crate::console_web::ConsoleAssetSource::from_directory(directory).map_err(|error| {
-            ProductError::new(
-                "console_assets_invalid",
-                error.to_string(),
-                Some("Fix the development build directory, then retry."),
-            )
-        })?;
-    Ok(source.directory().map(Path::to_path_buf))
-}
-
-fn configure_console_assets_environment(command: &mut Command, directory: Option<&Path>) {
-    command.env_remove(crate::console_web::CONSOLE_ASSETS_DIR_ENV);
-    if let Some(directory) = directory {
-        command.env(crate::console_web::CONSOLE_ASSETS_DIR_ENV, directory);
     }
 }
 

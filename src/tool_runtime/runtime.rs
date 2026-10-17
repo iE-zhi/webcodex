@@ -399,27 +399,6 @@ impl ToolRuntime {
         self
     }
 
-    pub(crate) fn workflow_sessions_console_list(
-        &self,
-        project: &str,
-        limit: Option<usize>,
-    ) -> sessions::WorkflowSessionConsoleList {
-        self.sessions
-            .console_list_for_project(project, limit, sessions::console_validation_hooks())
-    }
-
-    pub(crate) fn workflow_sessions_console_lists(
-        &self,
-        projects: &[&str],
-        limit: Option<usize>,
-    ) -> std::collections::HashMap<String, sessions::WorkflowSessionConsoleList> {
-        self.sessions.console_lists_for_projects(
-            projects,
-            limit,
-            sessions::console_validation_hooks(),
-        )
-    }
-
     pub(crate) fn workflow_session_console_detail(
         &self,
         project: &str,

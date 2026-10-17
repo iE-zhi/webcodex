@@ -33,7 +33,6 @@ const AUTO_REGISTERED_PROJECT_SOURCE: &str = "auto_registered";
 
 const LIST_PROJECTS_MAX_QUERY_CHARS: usize = 200;
 const LIST_PROJECTS_MAX_RESULTS: usize = 100;
-const RUNTIME_CONSOLE_LIST_PROJECTS_MAX_RESULTS: usize = 2_000;
 
 #[derive(Debug, Default)]
 pub(crate) struct ListProjectsOptions {
@@ -234,29 +233,6 @@ impl ToolRuntime {
     ) -> ToolResult {
         self.list_projects_with_options_cap(auth, options, LIST_PROJECTS_MAX_RESULTS)
             .await
-    }
-
-    pub(crate) async fn list_projects_for_runtime_console(
-        &self,
-        auth: Option<&AuthContext>,
-        client_id: Option<String>,
-        project: Option<String>,
-        query: Option<String>,
-        limit: usize,
-    ) -> ToolResult {
-        self.list_projects_with_options_cap(
-            auth,
-            ListProjectsOptions {
-                client_id,
-                project,
-                query,
-                limit: Some(limit),
-                summary_only: false,
-                include_git_summary: false,
-            },
-            RUNTIME_CONSOLE_LIST_PROJECTS_MAX_RESULTS,
-        )
-        .await
     }
 
     pub(super) async fn list_projects_with_options_cap(

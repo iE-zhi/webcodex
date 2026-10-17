@@ -391,38 +391,6 @@ impl ToolRuntime {
         self.window_collaboration_page_for_scopes(window, &operator, &peer, limit, before)
     }
 
-    #[cfg(test)]
-    pub(crate) fn window_collaboration_for_principal(
-        &self,
-        window: &str,
-        recipient_principal_kind: &str,
-        recipient_principal_id: &str,
-        limit: usize,
-    ) -> serde_json::Value {
-        self.window_collaboration_page_for_principal(
-            window,
-            recipient_principal_kind,
-            recipient_principal_id,
-            limit,
-            None,
-        )
-    }
-
-    pub(crate) fn window_collaboration_page_for_principal(
-        &self,
-        window: &str,
-        kind: &str,
-        principal: &str,
-        limit: usize,
-        before: Option<&str>,
-    ) -> serde_json::Value {
-        let Ok(operator) = self.operator_principal_for_target(window, kind, principal, None) else {
-            return json!({"available":false,"can_send":false,"messages":[],"error_kind":"operator_recipient_unavailable"});
-        };
-        let peer = (kind.to_string(), principal.to_string());
-        self.window_collaboration_page_for_scopes(window, &operator, &peer, limit, before)
-    }
-
     fn window_collaboration_page_for_scopes(
         &self,
         window: &str,

@@ -32,7 +32,7 @@ class TestInventoryScriptTests(unittest.TestCase):
             """#[tokio::test]\n#[ignore = \"process fixture\"]\nasync fn runner_test() {\n    let _endpoint = \"127.0.0.1:0\";\n    std::env::set_var(\"WEBCODEX_FIXTURE_TOKEN\", \"SECRET_SENTINEL\");\n}\n""",
         )
         write_text(
-            self.root / "crates" / "webcodex-cli" / "tests" / "help.rs",
+            self.root / "crates" / "webcodex-computer" / "tests" / "help.rs",
             """#[test]\nfn cli_help() {}\n""",
         )
 
@@ -55,7 +55,7 @@ class TestInventoryScriptTests(unittest.TestCase):
                 "scripts/test_inventory.sh",
                 "src/lib.rs",
                 "crates/webcodex-runner/src/lib.rs",
-                "crates/webcodex-cli/tests/help.rs",
+                "crates/webcodex-computer/tests/help.rs",
             ],
             cwd=self.root,
             check=True,
@@ -112,7 +112,7 @@ class TestInventoryScriptTests(unittest.TestCase):
         )
         self.assertEqual(
             list(rows),
-            ["crates/webcodex-cli", "crates/webcodex-runner", "webcodex"],
+            ["crates/webcodex-computer", "crates/webcodex-runner", "webcodex"],
         )
         self.assertEqual(rows["webcodex"], ["1", "1", "0", "0", "1", "0", "0", "0", "0"])
         self.assertEqual(
@@ -120,7 +120,7 @@ class TestInventoryScriptTests(unittest.TestCase):
             ["1", "0", "1", "1", "0", "0", "1", "1", "0"],
         )
         self.assertEqual(
-            rows["crates/webcodex-cli"],
+            rows["crates/webcodex-computer"],
             ["1", "1", "0", "0", "0", "0", "0", "0", "0"],
         )
         self.assertNotIn("generated.rs", result.stdout)

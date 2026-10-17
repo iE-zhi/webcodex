@@ -106,17 +106,6 @@ def build_parser() -> argparse.ArgumentParser:
     build_status.add_argument("--timeout", type=float, default=30.0)
     build_status.add_argument("--wait-secs", type=int, default=0)
 
-    stage_npm = subparsers.add_parser(
-        "stage-npm",
-        help="stage and smoke the npm package using exact retained linux-x64 CI binaries",
-    )
-    stage_npm.add_argument("--bundle-dir", type=Path, required=True)
-    stage_npm.add_argument("--source-root", type=Path, default=Path.cwd())
-    stage_npm.add_argument("--output-dir", type=Path, required=True)
-    stage_npm.add_argument("--repo", default=collector.DEFAULT_REPO)
-    stage_npm.add_argument("--require-unified-installers", action="store_true")
-    stage_npm.add_argument("--require-runtime-installers", action="store_true")
-
     verify_draft = subparsers.add_parser(
         "verify-draft",
         help="verify draft GitHub Release asset digests against the retained bundle without re-downloading",
@@ -281,22 +270,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(json.dumps(summary, indent=2, sort_keys=True))
         return exit_code
-
-    if args.command == "stage-npm":
-        try:
-            summary = publication.stage_npm(
-                repo=args.repo,
-                require_unified_installers=args.require_unified_installers,
-                require_runtime_installers=args.require_runtime_installers,
-                bundle_dir=args.bundle_dir,
-                source_root=args.source_root,
-                output_dir=args.output_dir,
-            )
-        except (collector.CollectionError, publication.PublicationError) as exc:
-            print(f"release operator stage-npm failed: {exc}", file=sys.stderr)
-            return 1
-        print(json.dumps(summary, indent=2, sort_keys=True))
-        return 0
 
     if args.command == "verify-draft":
         try:

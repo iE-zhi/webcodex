@@ -2,9 +2,7 @@
 
 [English](unified-installation.md)
 
-本文描述当前开发源码中的统一安装流程，不代表已有新版本发布。Windows NSIS、macOS 安装包和 Debian 12 / Ubuntu 22.04+ `.deb` 计划在 x64 与 arm64 上统一包含 Desktop、CLI、Server 和 Runner。Linux 统一安装包会在原生架构的 Ubuntu 22.04 容器中构建和探测，将 GLIBC 符号版本限制在 2.35 以内，并检查运行时依赖。三种平台的真实机器安装、重启持久性、GUI 会话行为和升级尚未全部验收。具体检查项见[部署验收清单](unified-deployment-validation.md)。
-
-已发布文件请从 [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases)获取。仓库 [`download/`](../download/README.md) 目录仅包含静态页面源文件；生成的 `manifest.json` 不提交到仓库。[下载页 workflow](https://github.com/yyjeqhc/webcodex/actions/workflows/download-page.yml) 会在 Release 发布后构建基于 manifest 的 GitHub Actions artifact，但不会托管或部署网页。安装包发布前如需预览特定源码修订，请看 [Linux 源码预览](DESKTOP_DEVELOPMENT.zh-CN.md#linux-源码预览与已有-server)。
+本文仅保留旧版 Desktop 安装器的历史升级参考。当前无界面版本不再构建统一 Desktop 安装包，使用 [README](../README.zh-CN.md) 构建和部署 Server、Runner。旧版发布文件仍可从 [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases) 获取。
 
 无需 Desktop 的 Linux 电脑，请参见 [Runtime 安装与 CLI 加入主节点](runtime-installation.zh-CN.md)，了解 Runtime 软件包、受保护的配对输入，以及共享的无界面更新/恢复入口。
 

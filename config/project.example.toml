@@ -1,0 +1,5 @@
+# Save as /etc/webcodex/projects/my-project.toml on the Runner host.
+id = "my-project"
+name = "My Project"
+path = "/srv/projects/my-project"
+allow_patch = true

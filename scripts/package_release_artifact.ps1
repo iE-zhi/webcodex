@@ -1,18 +1,13 @@
 # Windows-native release artifact packaging for WebCodex.
 #
-# Produces `webcodex-v<VERSION>-win32-<ARCH>.tar.gz` from three Windows release
+# Produces `webcodex-v<VERSION>-win32-<ARCH>.tar.gz` from two Windows release
 # binaries. This is the Windows release path: it must run on the matching native
 # Windows host with nothing but PowerShell and the built-in Windows tooling. It never
 # requires Git Bash, WSL, or Unix chmod/install/sha256sum.
 #
-# The archive keeps the current three-binary npm contract:
-#
-#   webcodex.exe webcodex-server.exe webcodex-runner.exe
-#
-# webcodex-server.exe is a supported local foreground/share runtime on Windows.
-# The three-binary package supports explicit `webcodex share` with Cloudflare,
-# OpenAI Secure MCP Tunnel, or no tunnel. Managed Windows Server service lifecycle
-# remains unsupported and is not implied by packaging these binaries.
+# Binary archive contract:
+#   webcodex-server.exe  webcodex-runner.exe
+# Both components load TOML configuration files. No third CLI or Desktop.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts\package_release_artifact.ps1
@@ -26,7 +21,7 @@
 # binaries. webcodex-core's build.rs honors WEBCODEX_BUILT_AT when set, so a
 # release build should pin it once (e.g. `$env:WEBCODEX_BUILT_AT = ...` before
 # `cargo build --release`) to keep `built_at` identical across the packages;
-# see scripts/npm_install_windows_smoke.ps1 for the pattern.
+# use the canonical Cargo.toml version and tag identity for builds.
 #
 # On success prints the SHA-256 and the archive path. On failure exits
 # non-zero and never leaves a partial file under the final archive name.
@@ -62,11 +57,10 @@ if (-not $OutDir) {
 }
 
 if (-not $Version) {
-    $packageJson = Join-Path $Root "npm\webcodex\package.json"
-    $Version = (Get-Content -LiteralPath $packageJson -Raw | ConvertFrom-Json).version
-    if (-not $Version) {
-        throw "cannot read package version from $packageJson"
-    }
+    $manifest = Get-Content -LiteralPath (Join-Path $Root "Cargo.toml") -Raw
+    $found = [regex]::Match($manifest, '(?ms)^\[workspace\.package\]\s*.*?^version\s*=\s*"([^"]+)"')
+    if (-not $found.Success) { throw "missing Cargo workspace package version" }
+    $Version = $found.Groups[1].Value
 }
 if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
     throw "invalid package version '$Version'"
@@ -86,7 +80,7 @@ if ($Platform -notin @("win32-x64", "win32-arm64")) {
 $BinDir = Resolve-InputPath $BinDir
 $OutDir = Resolve-InputPath $OutDir
 
-$BinaryNames = @("webcodex", "webcodex-server", "webcodex-runner")
+$BinaryNames = @("webcodex-server", "webcodex-runner")
 $ArchiveName = "webcodex-v$Version-$Platform.tar.gz"
 $Archive = Join-Path $OutDir $ArchiveName
 $ArchiveTmp = "$Archive.tmp"
@@ -136,7 +130,7 @@ $Staging = Join-Path $OutDir (".win32-artifact-staging-" + [guid]::NewGuid().ToS
 try {
     New-Item -ItemType Directory -Force -Path (Join-Path $Staging "package") | Out-Null
 
-    # 1. All three release binaries must exist.
+    # 1. Both release binaries must exist.
     foreach ($name in $BinaryNames) {
         $source = Join-Path $BinDir "$name.exe"
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {

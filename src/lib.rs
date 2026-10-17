@@ -21,7 +21,6 @@ mod audit_http;
 mod auth;
 mod client_window;
 mod config;
-mod console_web;
 mod db;
 pub(crate) use webcodex_core::job_observation;
 mod job_receipts;
@@ -45,16 +44,17 @@ mod plugin_gateway;
 mod project_entry;
 mod projects;
 mod route_metadata;
+mod runner_bindings_file;
 mod runner_http;
 mod runner_quic;
 mod runner_session;
 mod runner_tokens_http;
 mod runner_ws;
-mod runtime_console_http;
 mod runtime_http;
 mod upgrade_http;
 mod upgrade_maintenance_store;
 pub(crate) use webcodex_store::ServerInstanceGuard;
+mod server_file_config;
 mod server_listener;
 mod server_shutdown;
 mod server_tunnels;
@@ -167,7 +167,7 @@ where
         },
         [arg] if matches!(arg.as_str(), "--help" | "-h") => ServerBinaryAction::Exit {
             code: 0,
-            stdout: "Usage: webcodex-server [OPTIONS]\n\nRun the WebCodex server runtime.\n\nOptions:\n      --env-file PATH     Load the selected private Server environment\n      --stop-on-stdin-eof  Stop when the invoking parent closes stdin\n  -h, --help               Print help and exit\n  -V, --version            Print version and exit\n".to_string(),
+            stdout: "Usage: webcodex-server [OPTIONS]\n\nRun the WebCodex server runtime.\n\nOptions:\n      --config PATH       Load the selected Server TOML configuration\n      --check-config      Validate TOML without starting the Server\n      --env-file PATH     Load a legacy private Server environment\n      --stop-on-stdin-eof  Stop when the invoking parent closes stdin\n  -h, --help               Print help and exit\n  -V, --version            Print version and exit\n".to_string(),
             stderr: String::new(),
         },
         [arg] if arg == "--build-info-json" => ServerBinaryAction::Exit {
@@ -214,6 +214,15 @@ pub const SERVER_SYSTEMD_TIMEOUT_STOP_SECS: u64 =
 static PREPARED_SERVER_ENV_LOADS: std::sync::OnceLock<Vec<config::EnvFileLoad>> =
     std::sync::OnceLock::new();
 
+fn load_selected_startup_configuration() -> Result<Vec<config::EnvFileLoad>, String> {
+    if server_file_config::selected_config_path()?.is_some() {
+        server_file_config::prepare()?;
+        Ok(Vec::new())
+    } else {
+        load_startup_env_files()
+    }
+}
+
 /// Prepare process-global Server startup state while the binary is still
 /// single-threaded. In particular this consumes systemd `LISTEN_*` metadata
 /// before the Tokio runtime exists, so neither the metadata nor the activation
@@ -223,11 +232,17 @@ pub fn prepare_server_process_environment() -> Result<(), String> {
     if PREPARED_SERVER_ENV_LOADS.get().is_some() {
         return Ok(());
     }
-    let env_loads = load_startup_env_files()?;
+    let env_loads = load_selected_startup_configuration()?;
     server_listener::prepare_activation_from_env()?;
     PREPARED_SERVER_ENV_LOADS
         .set(env_loads)
         .map_err(|_| "Server process environment was prepared concurrently".to_string())
+}
+
+/// Validate canonical server.toml without binding sockets or starting services.
+#[doc(hidden)]
+pub fn validate_server_configuration() -> Result<(), String> {
+    server_file_config::validate_selected()
 }
 
 /// Loads one validated service-owned environment at process startup. Tunnel
@@ -260,7 +275,7 @@ pub async fn run_server_with_shutdown(
     .map_err(std::io::Error::other)?;
     let env_loads = match PREPARED_SERVER_ENV_LOADS.get() {
         Some(prepared) => prepared.clone(),
-        None => load_startup_env_files().map_err(std::io::Error::other)?,
+        None => load_selected_startup_configuration().map_err(std::io::Error::other)?,
     };
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -286,13 +301,10 @@ pub async fn run_server_with_shutdown(
         .await
         .map_err(std::io::Error::other)?;
     let mut tunnels = server_tunnels::TunnelSupervisor::from_env(listener_addr)?;
-    let console_asset_source = Arc::new(
-        console_web::ConsoleAssetSource::from_env(&config.addr).map_err(std::io::Error::other)?,
-    );
     if !config.is_auth_enabled() {
         tracing::warn!(
             "WEBCODEX_TOKEN is not set! Running in development mode without authentication. \
-Use `webcodex server init` to generate a bootstrap/admin key, or set WEBCODEX_ALLOW_ANONYMOUS=true \
+Configure server.token_file in server.toml, or set WEBCODEX_ALLOW_ANONYMOUS=true \
 only for local/trusted-network demos."
         );
         tracing::warn!("Anonymous API access is rejected by default in production mode.");
@@ -327,12 +339,11 @@ explicitly allow remote shared-key auth."
         listener_addr,
         listener_mode
     );
-    tracing::info!("Console assets: {}", console_asset_source.mode_label());
-    if let Some(directory) = console_asset_source.directory() {
-        tracing::info!("Console assets directory: {}", directory.display());
-    }
     std::fs::create_dir_all(&config.data_dir)?;
+    server_file_config::ensure_direct_tunnel_readiness(&config.data_dir)
+        .map_err(std::io::Error::other)?;
     let db = Database::open(&config.db_path())?;
+    runner_bindings_file::provision_from_environment(&db).map_err(std::io::Error::other)?;
     let server_instance_guard = ServerInstanceGuard::acquire(&db)?;
     db.recover_agent_wakes_for_server_takeover(
         &server_instance_guard,
@@ -474,7 +485,6 @@ explicitly allow remote shared-key auth."
             Router::with_path(route_metadata::api_path(RouteId::CloudflareControl))
                 .post(cloudflare_ingress::cloudflare_control_handler),
         )
-        .push(runtime_console_http::routes())
         .push(admin_http::routes())
         .push(
             Router::with_path(route_metadata::api_path(RouteId::ToolsList))
@@ -660,42 +670,6 @@ explicitly allow remote shared-key auth."
 
     let health_router = Router::with_path(route_metadata::root_path(RouteId::Healthz)).get(healthz);
 
-    let runtime_root = RouteId::RuntimeWebRoot;
-    let runtime_console_router = Router::with_path(route_metadata::root_path(runtime_root))
-        .get(console_web::runtime_html)
-        .push(
-            Router::with_path(route_metadata::direct_child_path(
-                runtime_root,
-                RouteId::RuntimeWebAppJs,
-            ))
-            .get(console_web::runtime_app_js),
-        )
-        .push(
-            Router::with_path(route_metadata::direct_child_path(
-                runtime_root,
-                RouteId::RuntimeWebStylesCss,
-            ))
-            .get(console_web::runtime_styles_css),
-        );
-
-    let admin_root = RouteId::AdminWebRoot;
-    let admin_router = Router::with_path(route_metadata::root_path(admin_root))
-        .get(console_web::admin_html)
-        .push(
-            Router::with_path(route_metadata::direct_child_path(
-                admin_root,
-                RouteId::AdminWebAppJs,
-            ))
-            .get(console_web::admin_app_js),
-        )
-        .push(
-            Router::with_path(route_metadata::direct_child_path(
-                admin_root,
-                RouteId::AdminWebStylesCss,
-            ))
-            .get(console_web::admin_styles_css),
-        );
-
     let mut router = Router::new()
         .hoop(server_shutdown::DrainAdmission::new(
             shutdown_coordinator.clone(),
@@ -717,12 +691,9 @@ explicitly allow remote shared-key auth."
         .hoop(affix_state::inject(tool_runtime.clone()))
         .hoop(affix_state::inject(cloudflare_control))
         .hoop(affix_state::inject(project_auth.clone()))
-        .hoop(affix_state::inject(console_asset_source))
         .hoop(cors.into_handler())
         .push(api_router)
         .push(health_router)
-        .push(runtime_console_router)
-        .push(admin_router)
         // OAuth2 token, revocation, and discovery endpoints — public, no
         // AuthMiddleware. Token/revoke clients authenticate via
         // client_id + client_secret in the form body.

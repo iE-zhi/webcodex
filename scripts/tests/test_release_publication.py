@@ -189,11 +189,7 @@ class PreflightTests(unittest.TestCase):
             publication.collector, "GitHubClient", return_value=client
         ), mock.patch.object(publication, "_github_branch_sha", return_value=SOURCE), mock.patch.object(
             publication, "_github_optional_json", return_value=None
-        ) as optional_json, mock.patch.object(
-            publication, "_fetch_public_json_optional", return_value=None
-        ), mock.patch.object(publication, "_git", return_value=""), mock.patch.object(
-            publication, "_run_capture", return_value="npm-publisher"
-        ) as run_capture:
+        ) as optional_json, mock.patch.object(publication, "_git", return_value=""):
             summary = publication.preflight_release(
                 repo=collector.DEFAULT_REPO,
                 version=VERSION,
@@ -204,14 +200,9 @@ class PreflightTests(unittest.TestCase):
             )
         self.assertTrue(summary["tag_available"])
         self.assertTrue(summary["github_release_available"])
-        self.assertTrue(summary["npm_version_available"])
         self.assertEqual(summary["source_ref"], SOURCE_REF)
         self.assertEqual(summary["github_source_ref_sha"], SOURCE)
         self.assertEqual(summary["github_user"], "publisher")
-        self.assertEqual(summary["npm_user"], "npm-publisher")
-        run_capture.assert_called_once_with(
-            ["npm", "whoami", "--registry", publication.NPM_REGISTRY], timeout=5
-        )
         self.assertEqual(optional_json.call_count, 2)
         client.fetch_authenticated_user.assert_called_once_with()
 
@@ -533,65 +524,6 @@ class DraftReleaseLookupTests(unittest.TestCase):
                 publication._find_authenticated_release_by_tag(client, TAG)
 
 
-class NpmStagingTests(unittest.TestCase):
-    def test_stage_npm_uses_existing_bundle_binaries_and_never_cargo(self) -> None:
-        summary = {
-            "tag": TAG,
-            "version": VERSION,
-            "source_sha": SOURCE,
-            "built_at": 1234567890,
-            "build_kind": "release",
-            "workflow_run_id": RUN_ID,
-            "archive_stem": f"webcodex-v{VERSION}",
-            "artifacts": {platform: "a" * 64 for platform in collector.PLATFORMS},
-            "desktop_artifacts": {
-                platform: {
-                    "filename": collector.desktop_artifact_filename(
-                        VERSION,
-                        platform,
-                        build_kind="release",
-                        tag=TAG,
-                        source_sha=SOURCE,
-                    ),
-                    "sha256": "b" * 64,
-                }
-                for platform in collector.DESKTOP_PLATFORMS
-            },
-        }
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            bundle = root / "bundle"
-            source = root / "source"
-            output = root / "stage"
-            bundle.mkdir()
-            source.mkdir()
-            (bundle / "manifest.json").write_text("{}\n", encoding="utf-8")
-            calls: list[list[str]] = []
-
-            def record(argv, **_kwargs):
-                calls.append(list(argv))
-
-            with mock.patch.object(publication, "verify_bundle", return_value=summary), mock.patch.object(
-                publication, "_require_exact_clean_root"
-            ), mock.patch.object(publication, "_git", return_value=SOURCE), mock.patch.object(
-                publication, "_extract_linux_x64_binaries"
-            ) as extract, mock.patch.object(publication, "_run_checked", side_effect=record):
-                result = publication.stage_npm(
-                    repo=collector.DEFAULT_REPO,
-                    bundle_dir=bundle,
-                    source_root=source,
-                    output_dir=output,
-                )
-
-        self.assertEqual(result["npm_smoke"], "passed")
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(Path(calls[0][1]).name, "stage_npm_release.sh")
-        self.assertEqual(Path(calls[1][1]).name, "npm_package_smoke.sh")
-        self.assertIn("--binary-dir", calls[1])
-        self.assertFalse(any("cargo" in argument for call in calls for argument in call))
-        extract.assert_called_once()
-
-
 class DraftVerificationTests(unittest.TestCase):
     def test_draft_asset_digests_replace_full_redownload(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -666,7 +598,7 @@ class DraftVerificationTests(unittest.TestCase):
             root = Path(temp)
             meta = _write_bundle(root)
             valid = publication.verify_bundle(root, collector.DEFAULT_REPO)
-            rc_version = "0.5.0-rc.1"
+            rc_version = "0.4.3-rc.1"
             rc_summary = {**valid, "tag": f"v{rc_version}", "version": rc_version}
             names = [
                 "SHA256SUMS",
@@ -712,13 +644,6 @@ class DraftVerificationTests(unittest.TestCase):
                     )
 
 
-class NpmPublicationContractTests(unittest.TestCase):
-    def test_package_pins_public_npm_registry(self) -> None:
-        package = json.loads(Path("npm/webcodex/package.json").read_text(encoding="utf-8"))
-        self.assertEqual(package["publishConfig"]["access"], "public")
-        self.assertEqual(package["publishConfig"]["registry"], publication.NPM_REGISTRY)
-
-
 class WorkflowContractTests(unittest.TestCase):
     def test_release_build_exposes_durable_request_id(self) -> None:
         workflow = Path(".github/workflows/release-build.yml").read_text(encoding="utf-8")
@@ -731,147 +656,38 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn('rustc -vV | grep -Fxq "host:', workflow)
         self.assertNotIn('file "$binary" | grep -Fq "$EXPECTED_FILE_ARCH"', workflow)
 
-    def test_public_macos_release_requires_persistent_signing_and_finalization(self) -> None:
-        for path in ("release-build.yml", "release-desktop-darwin-x64.yml"):
-            workflow = Path(".github/workflows", path).read_text()
-            self.assertIn("macos_ci_signing_setup.sh", workflow)
-            self.assertIn("vars.MACOS_SIGNING_MODE || 'self-signed'", workflow)
-            self.assertIn("vars.MACOS_CERTIFICATE_SHA1", workflow)
-            self.assertIn("secrets.MACOS_SIGNING_P12", workflow)
-            self.assertIn("macos_finalize_dmg.sh", workflow)
-            self.assertIn("security delete-keychain", workflow)
-            self.assertIn("if: always()", workflow)
-            self.assertNotIn('export APPLE_SIGNING_IDENTITY="-"', workflow)
-        primary = Path(".github/workflows/release-build.yml").read_text()
-        self.assertIn("macos_finalize_desktop.sh", primary)
-        self.assertIn("public release requires persistent signing identity", primary)
-
-    def test_supplemental_macos_intel_uses_machine_build_identity(self) -> None:
-        supplemental = Path(".github/workflows/release-desktop-darwin-x64.yml").read_text(encoding="utf-8")
-
-        self.assertIn("--build-info-json", supplemental)
-        self.assertIn("source_sha.startswith(commit)", supplemental)
-        self.assertIn("immutable runtime binaries disagree on commit identity", supplemental)
-        self.assertNotIn("SOURCE_SHORT:", supplemental)
-        self.assertNotIn("expected_version=", supplemental)
-
-    def test_release_build_fails_fast_and_keeps_unified_installers_optional(self) -> None:
+    def test_headless_release_preserves_native_signing_and_build_identity(self) -> None:
         workflow = Path(".github/workflows/release-build.yml").read_text(encoding="utf-8")
-        preflight = workflow.index("  preflight:")
-        prepare = workflow.index("  prepare:")
-        self.assertLess(preflight, prepare)
+        self.assertIn("macos_ci_signing_setup.sh", workflow)
+        self.assertIn("macos_sign_runner.sh", workflow)
+        self.assertIn("security delete-keychain", workflow)
+        self.assertIn("refs/tags/$tag", workflow)
+        self.assertIn("WEB" + "CODEX_GIT_COMMIT: ${{ needs.prepare.outputs.source_sha }}", workflow)
+        self.assertIn("WEBCODEX_GIT_DIRTY: 'false'", workflow)
+        for platform in collector.PLATFORMS:
+            self.assertIn(platform, workflow)
+        self.assertIn("verify_bundle_directory", workflow)
+        self.assertNotIn("apps/desktop", workflow)
+        self.assertNotIn("frontend/package-lock.json", workflow)
+        self.assertNotIn("tauri", workflow.lower())
+
+    def test_headless_release_rejects_unified_installers_before_build(self) -> None:
+        workflow = Path(".github/workflows/release-build.yml").read_text(encoding="utf-8")
+        self.assertLess(workflow.index("  preflight:"), workflow.index("  prepare:"))
         self.assertIn("Fail fast on deterministic release contracts", workflow)
         self.assertIn("bash scripts/release_check.sh --static-only", workflow)
-        self.assertIn("include_unified_installers:", workflow)
-        self.assertIn("default: false", workflow)
-        self.assertGreaterEqual(workflow.count("if: inputs.include_unified_installers"), 6)
-        self.assertIn("!inputs.include_unified_installers || needs.unified-native.result == 'success'", workflow)
-        self.assertIn("export CARGO_TARGET_DIR=/work/target", workflow)
-        self.assertGreaterEqual(workflow.count('desktop="$CARGO_TARGET_DIR/release/webcodex-desktop"'), 2)
-        self.assertIn('export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"', workflow)
-        self.assertIn('if os.environ["INCLUDE_UNIFIED_INSTALLERS"] == "true":', workflow)
-        self.assertIn('if installer_artifacts:', workflow)
-
+        self.assertIn("Headless release no longer produces Desktop-based installers.", workflow)
+        self.assertIn('desktop_artifacts": {}', workflow)
+        self.assertIn("scripts/prepare_release_metadata.py", workflow)
+        self.assertNotIn("  unified-native:", workflow)
+        self.assertNotIn("  runtime-native:", workflow)
+        self.assertFalse(Path(".github/workflows/release-desktop-darwin-x64.yml").exists())
+        self.assertFalse(Path(".github/workflows/download-page.yml").exists())
         ci = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertLess(
-            ci.index("Test deterministic release contract and tooling"),
+            ci.index("Check headless source layout"),
             ci.index("Check complete workspace production/test targets"),
         )
-
-    def test_download_page_skips_core_only_releases_without_hiding_malformed_installer_manifests(self) -> None:
-        workflow = Path(".github/workflows/download-page.yml").read_text(encoding="utf-8")
-        self.assertIn("Resolve optional installer manifest", workflow)
-        self.assertIn('echo "has_installers=false" >> "$GITHUB_OUTPUT"', workflow)
-        self.assertIn('print("true" if "installers" in manifest else "false")', workflow)
-        self.assertGreaterEqual(workflow.count("if: steps.manifest.outputs.has_installers == 'true'"), 2)
-        self.assertIn("python3 scripts/build_download_page.py", workflow)
-
-    def test_release_build_stages_desktop_candidates_in_workspace_dist(self) -> None:
-        workflow = Path(".github/workflows/release-build.yml").read_text(encoding="utf-8")
-
-        self.assertIn('Get-Content -LiteralPath "apps/desktop/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json', workflow)
-        self.assertIn('$tauriConfig.mainBinaryName', workflow)
-        self.assertIn('(\"release\\{0}.exe\" -f $tauriConfig.mainBinaryName)', workflow)
-        self.assertNotIn('"release\\webcodex-desktop.exe"', workflow)
-
-        self.assertIn('desktop_dist="$GITHUB_WORKSPACE/dist"', workflow)
-        self.assertIn('desktop="$desktop_dist/${{ steps.desktop_bundle.outputs.desktop_name }}"', workflow)
-        self.assertIn('printf \'%s  %s\\n\' "$digest" "$(basename "$desktop")" > "$desktop.sha256"', workflow)
-        self.assertIn('echo "path=$desktop" >> "$GITHUB_OUTPUT"', workflow)
-        self.assertIn('--dmg "${{ steps.desktop_dmg.outputs.path }}"', workflow)
-        self.assertIn(
-            '--evidence "$GITHUB_WORKSPACE/dist/${{ steps.desktop_bundle.outputs.desktop_name }}.evidence.json"',
-            workflow,
-        )
-
-        self.assertIn('$desktopDist = Join-Path $env:GITHUB_WORKSPACE "dist"', workflow)
-        self.assertIn('$installerPath = Join-Path $desktopDist $installerName', workflow)
-        self.assertIn('"DESKTOP_INSTALLER_PATH=$installerPath" >> $env:GITHUB_ENV', workflow)
-        self.assertIn('Copy-Item -LiteralPath $built[0].FullName -Destination $env:DESKTOP_INSTALLER_PATH', workflow)
-        self.assertIn('"$($env:DESKTOP_INSTALLER_PATH).sha256"', workflow)
-        self.assertIn('-Installer $env:DESKTOP_INSTALLER_PATH', workflow)
-
-        self.assertIn("dist/webcodex-desktop-*.dmg", workflow)
-        self.assertIn("dist/webcodex-desktop-*.dmg.sha256", workflow)
-        self.assertIn("dist/webcodex-desktop-*.dmg.evidence.json", workflow)
-        self.assertIn("dist/webcodex-desktop-*-${{ matrix.platform }}-setup.exe", workflow)
-        self.assertIn("dist/webcodex-desktop-*-${{ matrix.platform }}-setup.exe.sha256", workflow)
-        self.assertIn("webcodex-desktop-v$env:VERSION-$env:WEBCODEX_RELEASE_PLATFORM-setup.exe", workflow)
-        self.assertIn("-Platform $env:WEBCODEX_RELEASE_PLATFORM", workflow)
-
-        self.assertNotIn('desktop="dist/${{ steps.desktop_bundle.outputs.desktop_name }}"', workflow)
-        self.assertNotIn('$installer = Join-Path "dist" $env:DESKTOP_INSTALLER_NAME', workflow)
-        self.assertNotIn('-Installer (Join-Path "dist" $env:DESKTOP_INSTALLER_NAME)', workflow)
-
-    def test_release_build_pins_full_source_identity_and_fences_generated_inputs(self) -> None:
-        workflow = Path(".github/workflows/release-build.yml").read_text(encoding="utf-8")
-        windows_stage = Path("scripts/prepare_desktop_bundle.ps1").read_text(encoding="utf-8")
-        windows_smoke = Path("scripts/desktop_install_windows_smoke.ps1").read_text(encoding="utf-8")
-        mac_stage = Path("scripts/prepare_desktop_bundle_macos.py").read_text(encoding="utf-8")
-        mac_smoke = Path("scripts/desktop_install_macos_smoke.sh").read_text(encoding="utf-8")
-
-        self.assertGreaterEqual(
-            workflow.count("WEBCODEX_GIT_COMMIT: ${{ needs.prepare.outputs.source_sha }}"), 4
-        )
-        self.assertGreaterEqual(workflow.count("WEBCODEX_GIT_DIRTY: 'false'"), 4)
-        self.assertGreaterEqual(workflow.count("-e WEBCODEX_GIT_COMMIT"), 2)
-        self.assertNotIn("$shortCommit", workflow)
-        self.assertNotIn('short_commit="$(git rev-parse --short=12 HEAD)"', workflow)
-        self.assertIn(
-            'expected="$name $VERSION (commit $SOURCE_SHA, dirty=false, built_at=$WEBCODEX_BUILT_AT)"',
-            workflow,
-        )
-        self.assertIn(
-            '$expected = "$name $env:VERSION (commit $env:SOURCE_SHA, dirty=false, built_at=$env:WEBCODEX_BUILT_AT)"',
-            workflow,
-        )
-
-        unified = workflow.index("  unified-native:")
-        fence = workflow.index("Fence exact clean source before generated inputs", unified)
-        download = workflow.index("path: runtime-input", unified)
-        self.assertLess(fence, download)
-        windows = workflow.index("  windows:")
-        self.assertGreater(fence, windows)
-        self.assertNotIn('[ -z "$(git status --porcelain --untracked-files=all)" ]\n              mkdir -p native-input', workflow)
-
-        self.assertIn("$sourceIdentity = $SourceSha.ToLowerInvariant()", windows_stage)
-        self.assertIn("commit $sourceIdentity", windows_stage)
-        self.assertIn("$sourceIdentity = $SourceSha.ToLowerInvariant()", windows_smoke)
-        self.assertIn("commit $sourceIdentity", windows_smoke)
-        self.assertIn("source_identity = args.source_sha.lower()", mac_stage)
-        self.assertIn("commit {source_identity}", mac_stage)
-        self.assertIn('source_identity="$(printf \'%s\' "$source_sha"', mac_smoke)
-        self.assertIn("commit $source_identity", mac_smoke)
-
-        ci = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
-        self.assertIn('export WEBCODEX_GIT_COMMIT="$source_sha"', ci)
-        self.assertIn('export WEBCODEX_GIT_DIRTY=false', ci)
-        self.assertIn('expected="$name $version (commit $source_sha, dirty=false, built_at=$built_at)"', ci)
-        self.assertIn('$env:WEBCODEX_GIT_COMMIT = $source', ci)
-        self.assertIn('$env:WEBCODEX_GIT_DIRTY = "false"', ci)
-        self.assertIn('$expected = "$name $version (commit $source, dirty=false, built_at=$builtAt)"', ci)
-        self.assertNotIn('expected="$name $version (commit $short_source, dirty=false, built_at=$built_at)"', ci)
-        self.assertNotIn('$expected = "$name $version (commit $short, dirty=false, built_at=$builtAt)"', ci)
 
     def test_server_image_publication_is_separate_and_multi_arch(self) -> None:
         candidate = Path(".github/workflows/release-build.yml").read_text(encoding="utf-8")

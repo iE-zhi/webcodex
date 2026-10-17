@@ -59,10 +59,15 @@ pub(crate) struct TunnelSupervisor {
 }
 impl TunnelSupervisor {
     pub(crate) fn from_env(listener: SocketAddr) -> std::io::Result<Self> {
-        let Some(root) = std::env::var_os("WEBCODEX_TUNNEL_ENVIRONMENT") else {
+        let profiles = if let Some(profile) =
+            crate::server_file_config::direct_tunnel_profile().map_err(std::io::Error::other)?
+        {
+            vec![profile]
+        } else if let Some(root) = std::env::var_os("WEBCODEX_TUNNEL_ENVIRONMENT") {
+            embedded_tunnel_profiles(Path::new(&root)).map_err(std::io::Error::other)?
+        } else {
             return Ok(Self::default());
         };
-        let profiles = embedded_tunnel_profiles(Path::new(&root)).map_err(std::io::Error::other)?;
         let ip = match listener.ip() {
             IpAddr::V4(ip) if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
             IpAddr::V6(ip) if ip.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),

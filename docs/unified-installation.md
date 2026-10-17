@@ -2,9 +2,7 @@
 
 [简体中文](unified-installation.zh-CN.md)
 
-This guide describes the unified installer workflow in the current development source. It is not a claim that a new release is available. Windows NSIS, macOS package, and Debian 12 / Ubuntu 22.04+ `.deb` builds are intended to include Desktop, CLI, Server, and Runner for x64 and arm64. Linux unified installers build and probe in native-architecture Ubuntu 22.04 containers, with GLIBC symbol requirements capped at 2.35 and runtime dependencies checked there. Real-machine installation, reboot persistence, GUI-session behavior, and upgrade have not been accepted across all three platforms. Track the concrete checks in [Deployment validation](unified-deployment-validation.md).
-
-Get published files from [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases). The tracked [`download/`](../download/README.md) directory contains only the static page source; its generated `manifest.json` is intentionally not committed. The [download-page workflow](https://github.com/yyjeqhc/webcodex/actions/workflows/download-page.yml) builds a manifest-based GitHub Actions artifact after a release, but does not host or deploy it. To preview a source revision before installer release, follow [Linux source preview](DESKTOP_DEVELOPMENT.md#linux-source-preview-against-an-existing-server).
+This guide records the historical Desktop-based installer workflow for existing deployments; the current headless project no longer builds a unified Desktop installer. Use the [headless README](../README.md) for the current Server/Runner build and deployment. Previously published releases remain available on [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases).
 
 For Linux machines without Desktop, see [Runtime installation and CLI join](runtime-installation.md) for the Runtime package, protected pairing input and the shared headless update/recovery entry point.
 

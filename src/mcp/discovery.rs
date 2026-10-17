@@ -12,9 +12,7 @@ pub(super) const INPUT_DESCRIPTION_MAX_CHARS: usize = 180;
 
 pub(super) fn compact_tool(tool: &mut Value) {
     let name = tool["name"].as_str().unwrap_or_default().to_string();
-    let workbench_app_only = tool.pointer("/_meta/ui/visibility")
-        == Some(&serde_json::json!(["app"]))
-        && super::workbench::CANONICAL_TOOLS.contains(&name.as_str());
+    let workbench_app_only = false;
     if let Some(description) = tool["description"].as_str() {
         let selection = match name.as_str() {
             "list_runners" if workbench_app_only => "List authorized Runner status and capabilities. Inventory is observation, not execution authority.",

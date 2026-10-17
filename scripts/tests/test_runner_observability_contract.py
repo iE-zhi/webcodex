@@ -9,13 +9,8 @@ RUST_PROJECTIONS = (
     "src/tool_runtime/projects.rs",
     "src/tool_runtime/coding_task.rs",
     "src/admin_http.rs",
-    "src/runtime_console_http.rs",
     "src/pairing_http/runner_capabilities.rs",
     "crates/webcodex-tool-contracts/src/registry/output_schemas/discovery.rs",
-    "crates/webcodex-cli/src/webcodex_cli/ops.rs",
-    "crates/webcodex-cli/src/webcodex_cli/server.rs",
-    "crates/webcodex-cli/src/webcodex_cli/connect/probe.rs",
-    "crates/webcodex-cli/src/webcodex_cli/runner_service.rs",
 )
 SCRIPTS = (
     "e2e_job_reconciliation_ws.sh", "e2e_job_recovery_failures_ws.sh",
@@ -45,8 +40,7 @@ class RunnerObservabilityContract(unittest.TestCase):
     def test_production_projections_use_runner_names(self):
         for relative in RUST_PROJECTIONS:
             with self.subTest(path=relative):
-                # Only inline test modules are excluded; all production code,
-                # including both Console DTOs, remains in the guarded scope.
+                # Only inline test modules are excluded; backend projections are guarded.
                 source = re.split(r"(?m)^#\[cfg\(test\)\]\s*\nmod \w+\s*\{", read_source(relative), maxsplit=1)[0]
                 self.assertTrue(source.strip(), relative)
                 self.assertEqual(projection_violations(source), [], relative)
@@ -60,14 +54,6 @@ class RunnerObservabilityContract(unittest.TestCase):
             self.assertNotIn(".agent_instance_id", source)
             self.assertNotIn("AgentInstanceId", source)
 
-    def test_frontend_runner_fields_use_runner_names(self):
-        for relative in ("frontend/src/runtime-v2/model/types.ts",
-                         "frontend/src/admin-react/AdminApp.tsx", "scripts/ui-smoke/fixtures.mjs"):
-            source = read_source(relative)
-            for field in ("agent_protocol_generation", "agents_online", "agents_total"):
-                self.assertNotIn(field, source, relative)
-        # The same fixtures legitimately include communication/agents.
-        self.assertIn("communication/agents", read_source("scripts/ui-smoke/fixtures.mjs"))
 
     def test_guard_detects_keys_reads_and_serialization_aliases(self):
         for source in ('json!({"agents": []})', '.pointer("/agents/clients")',

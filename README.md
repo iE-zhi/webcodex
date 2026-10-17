@@ -1,182 +1,31 @@
-<p align="right"><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a></p>
+# WebCodex
 
-<p align="center"><img src="docs/assets/brand/webcodex-app-icon.png" alt="WebCodex" width="96" height="96"></p>
+Headless ChatGPT MCP backend configured through TOML files. **Exactly two backend executables**:
 
-<h1 align="center">WebCodex</h1>
+- **`webcodex-server`** — MCP, authentication, task lifecycle, and embedded OpenAI Tunnel.
+- **`webcodex-runner`** — projects, files, Git, shell commands, browser, and Computer Use.
 
-<p align="center"><strong>Give cloud AI agents a real development environment on your own machines.</strong></p>
-<p align="center">Connect ChatGPT, Claude, and other MCP clients to the repositories, Git checkout, and tools you already use.</p>
-<p align="center"><a href="docs/unified-installation.md">One computer</a> · <a href="docs/unified-installation.md#several-computers">Several computers</a> · <a href="#documentation">Documentation</a> · <a href="https://github.com/yyjeqhc/webcodex/issues">Issues</a> · <a href="CONTRIBUTING.md">Contribute</a> · <a href="SECURITY.md">Security</a></p>
+No standalone `webcodex` CLI, Desktop, Web Console, or display-only MCP Apps are distributed. Minimal Computer screenshot and Agent/Job continuation Host carriers remain.
 
-<p align="center">
-  <a href="docs/MCP.md"><img src="https://img.shields.io/badge/protocol-MCP-2563EB?labelColor=1E40AF&amp;style=flat-square" alt="MCP protocol"></a>
-  <a href="docs/QUICK_START.md#prerequisites"><img src="https://img.shields.io/badge/Node.js-18%2B-0D9488?labelColor=0F766E&amp;style=flat-square" alt="Node.js 18 or newer"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-2563EB?labelColor=1E40AF&amp;style=flat-square" alt="Apache 2.0 license"></a>
-</p>
-
-WebCodex is a self-hosted tool runtime: a Server authenticates requests and routes them to a Runner on the machine that owns the repository. Ask your assistant to inspect a repository, modify code, run tests, use Git, or investigate a failure. You do not need to move the project into a hosted workspace; requested file content and other tool results can still be returned to the AI client.
-
-<p align="center">
-  <a href="https://trendshift.io/repositories/121867">
-    <img src="https://trendshift.io/api/badge/repositories/121867" alt="WebCodex | GitHub Trending" width="250" height="55" />
-  </a>
-</p>
-
-## Start using WebCodex
-
-For a temporary one-repository trial, start with [Quick Trial](docs/QUICK_START.md) and `webcodex share`. For a persistent setup, the unified installer workflow below is under development; see the [validation status](docs/unified-deployment-validation.md) before choosing an artifact. Once a validated installer is available, choose the setup that matches where your code lives:
-
-- **One computer:** install WebCodex on your personal workstation, open Desktop, and follow [Unified installation](docs/unified-installation.md). This setup includes Desktop, CLI, Server, and Runner in one platform package.
-- **Several computers:** install the same package on the machine that will host the WebCodex Server and on each machine that owns repositories. Follow [Unified installation](docs/unified-installation.md#several-computers) and [Deployment validation](docs/unified-deployment-validation.md).
-
-The build pipeline defines unified Windows NSIS, macOS package, and Debian 12 / Ubuntu 22.04+ `.deb` installer targets for x64 and arm64. The six installer variants still require native build and installation acceptance before release. Real-machine installation, reboot persistence, GUI behavior, and upgrade have not been accepted across all three platforms; this documentation makes no claim of identical cross-platform behavior. Published files are listed in [GitHub Releases](https://github.com/yyjeqhc/webcodex/releases). The [`download/`](download/README.md) directory contains static page source only; the [download-page workflow](https://github.com/yyjeqhc/webcodex/actions/workflows/download-page.yml) builds a Release-manifest-based GitHub Actions artifact after publication, but does not host or deploy a page. For a source preview, check out the exact feature or release revision you intend to evaluate and follow [Desktop development](docs/DESKTOP_DEVELOPMENT.md#linux-source-preview-against-an-existing-server).
-
-For Linux machines that join an existing Server without Desktop, see [Runtime installation and CLI join](docs/runtime-installation.md). For advanced self-hosting, npm/runtime archives, Docker, or historical release artifacts, see [Deployment](docs/DEPLOYMENT.md).
-
-## What can it do?
-
-- **Understand and edit code** — read, search, inspect, and make guarded changes inside configured projects.
-- **Use the real toolchain** — run commands, tests, formatters, compilers, and project-specific tooling on the machine that owns the repository.
-- **Work with Git** — inspect status and diffs while keeping repository operations visible and reviewable.
-- **Handle long-running work** — keep jobs observable instead of requiring one model turn to stay open indefinitely.
-- **Support human review** — use the [Runtime Console](docs/runtime-console.md), Workflow Session evidence, Jobs, and Git/diff review without a separate task/result acceptance subsystem.
-
-## Why WebCodex?
-
-- **Your code stays on your machine.** The repository does not need to be copied into the chat service.
-- **The agent gets a real development environment.** It can use the same files, Git checkout, compilers, tests, and tools you already use.
-- **Work survives beyond a single request.** Long-running execution and evidence remain observable through WebCodex.
-- **Start temporary or run it long-term.** Use one-command sharing for a quick session, or connect machines to a self-hosted Server for a durable setup.
-
-## How it works
-
-```text
-AI client
-   |
-   | MCP / HTTPS
-   v
-WebCodex Server
-   |
-   | authenticated Runner connection
-   v
-Runner on your machine
-   |
-   +-- repository
-   +-- Git
-   +-- compilers / tests / developer tools
-```
-
-For the internal Server/Runner architecture, protocol surfaces, and authority boundaries, see [Architecture](docs/ARCHITECTURE.md), [MCP](docs/MCP.md), and [Authentication](docs/AUTH_MODEL.md).
-
-## Star History
-
-This chart tracks the upstream [yyjeqhc/webcodex](https://github.com/yyjeqhc/webcodex) repository.
-
-<a href="https://www.star-history.com/yyjeqhc/webcodex">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=yyjeqhc/webcodex&amp;type=Date&amp;theme=dark">
-    <img alt="Star history of yyjeqhc/webcodex" src="https://api.star-history.com/svg?repos=yyjeqhc/webcodex&amp;type=Date">
-  </picture>
-</a>
-
-## Platform packages
-
-The unified installer targets Windows NSIS, macOS, and Debian 12 / Ubuntu 22.04+ `.deb` on x64 and arm64. The build pipeline defines these targets; the six installer variants still require native build and installation acceptance before release. See [Unified installation](docs/unified-installation.md) and the [validation checklist](docs/unified-deployment-validation.md). Existing release artifacts and npm/Docker deployment paths remain documented as advanced historical/current compatibility references in [Deployment](docs/DEPLOYMENT.md).
-
-## Documentation
-
-- [Unified installation](docs/unified-installation.md) — personal and multi-computer setup for the unified package
-- [Deployment validation](docs/unified-deployment-validation.md) — platform acceptance status and required native checks
-- [Runtime installation and CLI join](docs/runtime-installation.md) — headless Linux Runner setup and package update/recovery
-- [Legacy Desktop installation](docs/desktop-install.md) — existing release-specific detailed guide
-- [Using Desktop](docs/desktop-guide.md) — projects, connections, activity, and background operation
-- [Desktop Runtime compatibility](docs/DESKTOP_RUNTIME_COMPATIBILITY.md) — compatible Runtime selection, diagnostics, and rollback
-- [Runtime Console](docs/runtime-console.md) — browser-based activity, projects, Sessions, and Agent communication
-- [Session continuity](docs/SESSION_CONTINUITY.md) — explicitly save and resume authorized work across conversations
-- [Desktop development](docs/DESKTOP_DEVELOPMENT.md) — run from source on Linux, Windows, and macOS; build local packages
-- [Full Setup](docs/PERSONAL_SETUP.md) — CLI, existing Server, Linux, and advanced regular Server + Runner setup
-- [Quick Trial](docs/QUICK_START.md) — temporarily try one repository with `share`
-- [MCP](docs/MCP.md) — ChatGPT, Claude, authentication choices, and MCP reference
-- [Deployment](docs/DEPLOYMENT.md) — production, self-hosting, and advanced operations
-- [Troubleshooting](docs/TROUBLESHOOTING.md) — ChatGPT/MCP Host, connection, and runtime problems
-- [CLI](docs/CLI.md) — command and credential reference
-- [AI-assisted setup](docs/AI_ONBOARDING.md) — have an AI agent help configure WebCodex
-- [Security](SECURITY.md) — security model and operational guidance
-- [Documentation index](docs/INDEX.md) — all user and contributor documentation
-
-## Security
-
-WebCodex can read and modify files and execute commands inside configured project boundaries. Use version control, keep credentials out of prompts/logs/Git, and register only project roots the assistant should access. Tool results, including requested file excerpts, may be returned to the AI client. Read [SECURITY.md](SECURITY.md) for the complete model.
-
-## Build from source
-
-If a release has a problem, you do not need to wait for a maintainer to produce a
-new build. Reproducing the issue on current `main`, testing a focused fix locally,
-and submitting the result as a pull request are all welcome.
-
-For CLI / Server / Runner development, install [Git](https://git-scm.com/) and the
-stable Rust toolchain through [rustup](https://rustup.rs/), then build the normal
-dogfood profile:
+## Build
 
 ```bash
-cargo build --locked --profile dogfood --workspace --bins
+cargo build --locked --release --bins -p webcodex -p webcodex-runner
 ```
 
-The binaries are written under `target/dogfood/`. For Desktop/frontend work, also
-install Node.js 22 + npm and the native platform toolchain. Windows Desktop
-development needs an MSVC/Windows SDK environment; macOS development needs Xcode
-Command Line Tools. The complete prerequisites and source-build workflow are in the
-[Desktop development guide](docs/DESKTOP_DEVELOPMENT.md).
+## Configuration
 
-For local Desktop installer testing, use the repository helpers rather than a raw
-Tauri bundle command:
-
-```powershell
-# Windows: clean committed source
-.\scripts\build_desktop_windows_local.ps1
-
-# Windows: explicitly package uncommitted local work as dirty dogfood
-.\scripts\build_desktop_windows_local.ps1 -AllowDirty
-```
+Configuration uses `server.toml`, `runner.toml`, `runner-bindings.toml`, and per-project TOML files. Secrets must live in separate owner-private files referenced from TOML.
 
 ```bash
-# macOS
-bash scripts/build_desktop_macos_local.sh
+webcodex-server --config /etc/webcodex/server.toml --check-config
+webcodex-runner --config /etc/webcodex/runner.toml --check-config
+webcodex-server --config /etc/webcodex/server.toml
+webcodex-runner --config /etc/webcodex/runner.toml
 ```
 
-These are development/dogfood builds, not public release artifacts.
+Runner registration uses a SHA-256 credential hash and exact Runner identity in the Server's private TOML; no CLI pairing is needed. See the [TOML deployment guide](docs/HEADLESS_TOML.md), the [detailed Chinese guide](docs/HEADLESS_TOML.zh-CN.md), and `config/*.example.toml`.
 
-## Contributing
+Python 3.11+ is needed for release tooling. Legacy env-based deployments remain supported for migration. Never place plaintext secrets in normal TOML or Git. See [SECURITY.md](SECURITY.md).
 
-Issues and focused pull requests are welcome. Maintainer response time may vary, so
-users who can reproduce a problem on current `main` are especially encouraged to
-investigate it, build and test a fix locally, and submit a PR rather than waiting for
-the fix to be implemented upstream. WebCodex itself, Codex, ChatGPT, Claude, or other
-coding agents may be used to help inspect, edit, and validate the repository.
-
-For what to include in a bug report, the self-service fix workflow, validation
-expectations, and pull request guidance, see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Support WebCodex ☕
-
-If WebCodex has been useful to you, you can optionally buy the maintainer a coffee by scanning a QR code below. Stars, feedback, and contributions are equally appreciated. [Sponsorship details](docs/SPONSORSHIP.md).
-
-| WeChat appreciation | Alipay |
-| :---: | :---: |
-| <a href="docs/assets/sponsor/vx.png"><img src="docs/assets/sponsor/vx.png" alt="WeChat appreciation QR code" width="260"></a> | <a href="docs/assets/sponsor/zfb.png"><img src="docs/assets/sponsor/zfb.png" alt="Alipay personal payment card with QR code" width="320"></a> |
-
-Tap either image to open or save the full-resolution QR code. Please verify the recipient in your payment app before sending a tip; these are direct, voluntary contributions, not payments processed by GitHub.
-
-## Acknowledgements
-
-Thanks to the [LINUX DO](https://linux.do/) community for its welcoming space for technical discussion and support for open-source sharing.
-
-Thanks to [AtomGit](https://atomgit.com/) for hosting a mirror of WebCodex in China, making it easier for users in mainland China to access the project and find its releases.
-
-## License
-
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
-
-## Desktop Shell and Runtime upgrades
-
-Desktop can keep its existing shell while using a separately selected compatible Runtime folder. Build revisions and package versions are diagnostic identity, not compatibility gates. See [Desktop Runtime compatibility](docs/DESKTOP_RUNTIME_COMPATIBILITY.md) for custom builds, safe switching/rollback, diagnostics, tracing and update notifications.
+License: Apache-2.0.

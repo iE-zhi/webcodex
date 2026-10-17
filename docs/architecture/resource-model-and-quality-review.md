@@ -223,7 +223,7 @@ Plugin 已有 `NotStarted / OutcomeUnknown / Completed`，见 [plugin.rs](../../
 
 ### 5.5 UI 与观测层只消费事实
 
-[MCP presentation](../../src/mcp/presentation.rs)，9–33，将 App descriptor eligibility 与兼容投影分开；162–176 从 canonical lifecycle 派生展示状态。这个方向应保留。
+历史 MCP presentation 模块，9–33，将 App descriptor eligibility 与兼容投影分开；162–176 从 canonical lifecycle 派生展示状态。这个方向应保留。
 
 更好的卡片应回答“现在是否还有工作、是否可安全重试、下一步观察哪个身份”，而不是另建 UI 状态机。展示失败不应取消执行；显示完成不应替代测试/审查证据。若新增 Goal，应在现有执行之上做关联与推进；没有 Goal 时原 read/edit/run/test/observe 路径照常工作，不能强制普通工具先走 Goal admission。
 

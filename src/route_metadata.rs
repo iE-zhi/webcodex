@@ -5,7 +5,6 @@
 //! auth, console, audit, and test-only route tables.
 
 mod account;
-mod consoles;
 mod mcp;
 mod oauth;
 mod operations;
@@ -46,7 +45,6 @@ pub(crate) enum RouteSurface {
     OAuth,
     Mcp,
     RuntimeApi,
-    RuntimeConsole,
     Admin,
     Audit,
     AccountManagement,
@@ -85,40 +83,6 @@ pub(crate) enum RouteId {
     PairingEnroll,
     McpGet,
     McpPost,
-    RuntimeConsoleOverview,
-    RuntimeConsoleRunner,
-    RuntimeConsoleWindows,
-    RuntimeConsoleWindow,
-    RuntimeConsoleTrace,
-    RuntimeConsoleWindowCollaboration,
-    RuntimeConsoleWindowCollaborationPost,
-    RuntimeConsoleProjects,
-    RuntimeConsoleGoals,
-    RuntimeConsoleGoal,
-    RuntimeConsoleExtensions,
-    RuntimeConsoleInstruction,
-    RuntimeConsoleProjectGit,
-    RuntimeConsolePluginReload,
-    RuntimeConsoleWorkflowSessions,
-    RuntimeConsoleWorkflowSessionLocate,
-    RuntimeConsoleWorkflowSession,
-    RuntimeConsoleWorkflowSessionMessages,
-    RuntimeConsoleWorkflowSessionObserve,
-    RuntimeConsoleWorkflowSessionPostMessage,
-    RuntimeConsoleWorkflowSessionWithdrawMessage,
-    RuntimeConsoleWorkflowSessionReplaceMessage,
-    RuntimeConsoleCommunicationAgents,
-    RuntimeConsoleCommunicationAgentCreate,
-    RuntimeConsoleCommunicationAgentUpdate,
-    RuntimeConsoleCommunicationEndpointAttach,
-    RuntimeConsoleCommunicationEndpointRenew,
-    RuntimeConsoleCommunicationEndpointDetach,
-    RuntimeConsoleCommunicationConversations,
-    RuntimeConsoleCommunicationConversationCreate,
-    RuntimeConsoleCommunicationConversation,
-    RuntimeConsoleCommunicationMessagePost,
-    RuntimeConsoleCommunicationInbox,
-    RuntimeConsoleCommunicationInboxConsume,
     AdminDashboard,
     AdminProjectsRegister,
     AdminProjectsCreate,
@@ -172,13 +136,6 @@ pub(crate) enum RouteId {
     AuditSession,
     AuditStats,
     Healthz,
-
-    RuntimeWebRoot,
-    RuntimeWebAppJs,
-    RuntimeWebStylesCss,
-    AdminWebRoot,
-    AdminWebAppJs,
-    AdminWebStylesCss,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,11 +173,7 @@ const fn route(
 }
 
 #[cfg(test)]
-use crate::auth::scopes::SCOPE_SESSION_COLLABORATE;
-#[cfg(test)]
 use AuditClass::*;
-#[cfg(test)]
-use OAuthRouteScopePolicy::*;
 #[cfg(test)]
 use RouteId::*;
 #[cfg(test)]
@@ -230,7 +183,6 @@ const ROUTE_GROUPS: &[&[RouteSpec]] = &[
     oauth::PUBLIC_ROUTES,
     account::ENROLLMENT_ROUTES,
     mcp::ROUTES,
-    consoles::ROUTES,
     operations::ADMIN_ROUTES,
     runtime::ROUTES,
     oauth::MANAGEMENT_ROUTES,
@@ -239,7 +191,6 @@ const ROUTE_GROUPS: &[&[RouteSpec]] = &[
     runner_transport::ROUTES,
     operations::AUDIT_ROUTES,
     operations::PUBLIC_WEB_ROUTES,
-    consoles::PUBLIC_WEB_ROUTES,
 ];
 
 pub(crate) fn iter_routes() -> impl Iterator<Item = &'static RouteSpec> + Clone {
@@ -263,24 +214,6 @@ pub(crate) fn api_path(id: RouteId) -> &'static str {
 /// Path relative to the root Salvo router.
 pub(crate) fn root_path(id: RouteId) -> &'static str {
     spec(id).path.trim_start_matches('/')
-}
-
-/// Return the path segment for one canonical direct child route.
-///
-/// The production browser routers stay nested; this helper proves that the
-/// child RouteSpec actually belongs immediately under the canonical parent.
-pub(crate) fn direct_child_path(parent: RouteId, child: RouteId) -> &'static str {
-    let parent_path = spec(parent).path;
-    let child_path = spec(child).path;
-    child_path
-        .strip_prefix(parent_path)
-        .and_then(|suffix| suffix.strip_prefix('/'))
-        .filter(|suffix| !suffix.is_empty() && !suffix.contains('/'))
-        .unwrap_or_else(|| {
-            panic!(
-                "RouteId {child:?} path {child_path:?} is not a direct child of {parent:?} path {parent_path:?}"
-            )
-        })
 }
 
 /// Return one root-relative path after proving two method-specific specs share
@@ -416,10 +349,9 @@ mod tests {
         source.split("#[cfg(test)]").next().unwrap_or(source)
     }
 
-    fn mounted_route_sources() -> [&'static str; 4] {
+    fn mounted_route_sources() -> [&'static str; 3] {
         [
             include_str!("lib.rs"),
-            production_prefix(include_str!("runtime_console_http.rs")),
             production_prefix(include_str!("admin_http.rs")),
             production_prefix(include_str!("cloudflare_ingress.rs")),
         ]
@@ -468,7 +400,7 @@ mod tests {
         }
         assert_eq!(
             iter_routes().count(),
-            AdminWebStylesCss as usize + 1,
+            Healthz as usize + 1,
             "canonical iteration must cover every RouteId exactly once",
         );
         assert_eq!(lookup("GET", "/mcp").unwrap().id, McpGet);
@@ -577,7 +509,7 @@ mod tests {
             .filter(|spec| spec.surface == PublicWeb)
             .collect::<Vec<_>>();
         // The obsolete schema document is no longer a public route.
-        assert_eq!(routes.len(), 7);
+        assert_eq!(routes.len(), 1);
         for route in routes {
             assert_eq!(route.method, RouteMethod::Get, "{:?}", route.id);
             assert_eq!(
@@ -588,70 +520,6 @@ mod tests {
             );
             assert_eq!(route.auth, RouteAuth::Public, "{:?}", route.id);
             assert_eq!(route.audit_class, Other, "{:?}", route.id);
-        }
-        assert_eq!(
-            direct_child_path(RuntimeWebRoot, RuntimeWebStylesCss),
-            "styles.css"
-        );
-    }
-
-    #[test]
-    fn runtime_console_mutations_are_never_runtime_read_routes() {
-        let mutations = [
-            RuntimeConsoleWorkflowSessionPostMessage,
-            RuntimeConsoleWorkflowSessionWithdrawMessage,
-            RuntimeConsoleWorkflowSessionReplaceMessage,
-        ];
-        for id in mutations {
-            assert_eq!(
-                spec(id).scope_policy,
-                Require(SCOPE_SESSION_COLLABORATE),
-                "{id:?} must retain mutation-capable Session authority"
-            );
-        }
-    }
-
-    #[test]
-    fn communication_routes_use_independent_read_and_manage_authority() {
-        let reads = [
-            RuntimeConsoleCommunicationAgents,
-            RuntimeConsoleCommunicationConversations,
-            RuntimeConsoleCommunicationConversation,
-            RuntimeConsoleCommunicationInbox,
-        ];
-        for id in reads {
-            assert_eq!(
-                spec(id).scope_policy,
-                Require(crate::auth::scopes::SCOPE_COMMUNICATION_READ),
-                "{id:?} must require communication read authority"
-            );
-        }
-        let mutations = [
-            RuntimeConsoleCommunicationAgentCreate,
-            RuntimeConsoleCommunicationAgentUpdate,
-            RuntimeConsoleCommunicationEndpointAttach,
-            RuntimeConsoleCommunicationEndpointRenew,
-            RuntimeConsoleCommunicationEndpointDetach,
-            RuntimeConsoleCommunicationConversationCreate,
-            RuntimeConsoleCommunicationMessagePost,
-            RuntimeConsoleCommunicationInboxConsume,
-        ];
-        for id in mutations {
-            assert_eq!(
-                spec(id).scope_policy,
-                Require(crate::auth::scopes::SCOPE_COMMUNICATION_MANAGE),
-                "{id:?} must require communication manage authority"
-            );
-            assert_ne!(
-                spec(id).scope_policy,
-                Require(crate::auth::scopes::SCOPE_PROJECT_READ),
-                "communication identity must not inherit Project authority"
-            );
-            assert_ne!(
-                spec(id).scope_policy,
-                Require(crate::auth::scopes::SCOPE_SESSION_COLLABORATE),
-                "Conversation must remain distinct from Workflow Session collaboration"
-            );
         }
     }
 
@@ -701,9 +569,8 @@ mod tests {
             None
         );
 
-        assert_eq!(
-            audit_class_for_path("/api/runtime-console/projects"),
-            Some(Other)
-        );
+        // Removed browser-console endpoints are not audited as live routes.
+        assert_eq!(audit_class_for_path("/api/runtime-console/projects"), None);
+        assert!(lookup("GET", "/api/runtime-console/projects").is_none());
     }
 }

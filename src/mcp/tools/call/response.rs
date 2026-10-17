@@ -29,13 +29,10 @@ impl RuntimeResponse {
             invocation_facts,
             app_call_id,
         } = self;
-        let work_result_thread_panel = surface.work_result_thread_context.is_some();
-        let work_result_thread_context = surface.work_result_thread_context;
         let runtime = context.runtime;
         let auth = context.auth;
         let stateless_2026 = context.stateless_2026;
         let app_enabled = context.app_enabled;
-        let server_mcp_apps_enabled = context.server_mcp_apps_enabled;
         let id = context.id.clone();
         let lifecycle = &mut diagnostics.lifecycle;
         let model_ergonomics_out = &mut diagnostics.model_ergonomics_out;
@@ -96,11 +93,6 @@ impl RuntimeResponse {
         project_tool_result_suggested_calls(tool_name, &mut result, &|target| {
             mcp_suggested_tool_call_route(target, stateless_2026)
         });
-        // App display consumes the existing observation shape before the Host view
-        // separates details. Keep only its bounded projection, not another log copy.
-        let compact_app_presentation = (compact_execution && app_enabled)
-            .then(|| presentation::result_app_presentation(tool_name, &result.output))
-            .flatten();
         if compact_execution {
             crate::mcp::execution_control::project_result(&mut result);
         }
@@ -138,13 +130,6 @@ impl RuntimeResponse {
                 )
             }
         };
-        // Direct calls may omit discovery UI capabilities. Deliver the canonical identity
-        // privately as well, matching the generic App artifact transport's Host envelopes.
-        if server_mcp_apps_enabled && tool_name == "present_spreadsheet" {
-            if let Some(structured) = result.get("structuredContent").cloned() {
-                result["_meta"]["webcodex/spreadsheetSource"] = structured;
-            }
-        }
         if surface.echo_app_content {
             // ChatGPT production has been observed to complete View-originated
             // tools/call server-side while not forwarding structuredContent back to
@@ -154,34 +139,6 @@ impl RuntimeResponse {
             // results retain the compact text fallback.
             attach_app_tool_content_fallback(&mut result);
         }
-        if app_enabled && tool_name == "present_docx" {
-            if let Some(structured) = result.get("structuredContent").cloned() {
-                let meta = result
-                    .as_object_mut()
-                    .unwrap()
-                    .entry("_meta")
-                    .or_insert_with(|| json!({}));
-                meta["webcodex/docxDocument"] = structured;
-            }
-        }
-        if app_enabled && tool_name == "present_pdf" {
-            if let Some(structured) = result.get("structuredContent").cloned() {
-                result["_meta"]["webcodex/pdfDocument"] = structured;
-            }
-        }
-        if (app_enabled && tool_name == "present_work_result") || work_result_thread_panel {
-            // Initial model-originated presentation keeps normal model content compact.
-            // The private MCP App result channel lets the mounted View recover the exact
-            // bounded Work Result when a Host omits structuredContent from tool-result.
-            attach_work_result_app_private_result(&mut result);
-            if let Some(context) = work_result_thread_context {
-                // The admitted native entrypoint can omit discovery's UI capability
-                // on this call. Its exact authorized binding must still reach the View.
-                // Only the exact explicit presentation selection becomes refresh
-                // context. A Session merely linked to Window activity is not authority.
-                result["_meta"][WORK_RESULT_THREAD_CONTEXT_META_KEY] = context;
-            }
-        }
         if surface.host_continuation {
             log_agent_continuation_app_result(
                 lifecycle.as_deref(),
@@ -189,23 +146,6 @@ impl RuntimeResponse {
                 app_call_id.as_deref(),
                 &result,
             );
-        }
-        if app_enabled {
-            if compact_execution {
-                if let Some(projection) = compact_app_presentation {
-                    presentation::attach_presentation(&mut result, projection);
-                }
-            } else {
-                presentation::attach_result_app_presentation(tool_name, &mut result);
-            }
-            if let (Some(expectation), Some(presentation)) = (
-                outcome.correlation.failure_expectation_result.as_ref(),
-                result
-                    .pointer_mut("/_meta/webcodex~1presentation")
-                    .and_then(Value::as_object_mut),
-            ) {
-                presentation.insert("failure_expectation_result".to_string(), json!(expectation));
-            }
         }
         let model_ergonomics = model_ergonomics_completion.as_ref().and_then(|completion| {
             result

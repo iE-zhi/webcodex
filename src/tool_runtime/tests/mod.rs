@@ -90,7 +90,6 @@ mod validation_identity;
 mod validation_summary;
 mod work_on_project;
 mod work_result;
-mod workbench;
 mod write_project_file;
 
 mod external_observations;

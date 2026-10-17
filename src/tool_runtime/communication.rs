@@ -459,25 +459,6 @@ impl ToolRuntime {
         }
     }
 
-    pub(crate) fn renew_agent_endpoint(
-        &self,
-        auth: Option<&AuthContext>,
-        endpoint_id: String,
-        expected_controller_generation: i64,
-    ) -> ToolResult {
-        let principal = match communication_principal(auth) {
-            Ok(principal) => principal,
-            Err(result) => return result,
-        };
-        let Some(db) = self.communication_db.as_ref() else {
-            return communication_store_unavailable();
-        };
-        match db.renew_agent_endpoint(&principal, &endpoint_id, expected_controller_generation) {
-            Ok(result) => serialized_success(result),
-            Err(error) => communication_error(error, RecoveryKind::Reconcile),
-        }
-    }
-
     /// Host-integration boundary for registering a callable continuation
     /// adapter after an explicit Endpoint attach. This is intentionally not a
     /// model-facing tool: callback handles are process-local Host state.

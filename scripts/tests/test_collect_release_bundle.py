@@ -19,6 +19,12 @@ VERSION = "0.4.3"
 SOURCE_REF = f"release/v{VERSION}"
 
 
+def test_headless_platform_selection():
+    assert collector.primary_desktop_platforms_for_version("0.4.6") == collector.DESKTOP_PLATFORMS
+    assert collector.primary_desktop_platforms_for_version("0.5.0") == ()
+    assert collector.primary_desktop_platforms_for_version("0.5.1+build") == ()
+
+
 def _archive_bytes(platform: str) -> bytes:
     output = io.BytesIO()
     suffix = ".exe" if platform.startswith("win32-") else ""

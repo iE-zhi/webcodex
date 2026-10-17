@@ -112,7 +112,7 @@ jobs:
           # Docker tag names do not allow SemVer '+'. Underscore cannot occur in
           # SemVer itself, so this mapping remains collision-free for valid releases.
           image_version="${version//+/_}"
-          package_version="$(python3 -c 'import json; print(json.load(open("npm/webcodex/package.json", encoding="utf-8"))["version"])')"
+          package_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
           if [ "$package_version" != "$version" ]; then
             echo "Tag/package version mismatch: tag=$version package=$package_version" >&2
             exit 1
@@ -238,18 +238,17 @@ jobs:
             test "$(id -u)" = 10001
             test "$(id -g)" = 10001
             test ! -e /usr/local/bin/webcodex-runner
+            test ! -e /usr/local/bin/webcodex
           '
 
           server_info="$RUNNER_TEMP/webcodex-server-build-info.json"
-          cli_info="$RUNNER_TEMP/webcodex-cli-build-info.json"
           docker run --rm "$ref" --build-info-json > "$server_info"
-          docker run --rm --entrypoint /usr/local/bin/webcodex "$ref" --build-info-json > "$cli_info"
-          python3 - "$server_info" "$cli_info" "$VERSION" "$SOURCE_SHA" "$BUILT_AT" <<'PY'
+          python3 - "$server_info" "$VERSION" "$SOURCE_SHA" "$BUILT_AT" <<'PY'
           import json
           import sys
 
-          server_path, cli_path, version, source_sha, built_at = sys.argv[1:]
-          for path, binary in ((server_path, "webcodex-server"), (cli_path, "webcodex")):
+          path, version, source_sha, built_at = sys.argv[1:]
+          for path, binary in ((path, "webcodex-server"),):
               info = json.load(open(path, encoding="utf-8"))
               if info.get("schema_version") != 1 or info.get("binary") != binary:
                   raise SystemExit(f"unexpected image build-info schema: {binary}")

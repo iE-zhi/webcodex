@@ -64,8 +64,8 @@ class AggregateCancellationTests(unittest.TestCase):
                         self.assertNotEqual(self.run_gate(name, {lane: result}).returncode, 0)
 
     def test_only_policy_optional_lanes_may_be_skipped(self) -> None:
-        optional = {"test-macos": ("CORE", "DESKTOP"),
-                    "test-windows": ("CORE", "RUNNER", "PACKAGE", "DESKTOP"),
+        optional = {"test-macos": ("CORE",),
+                    "test-windows": ("CORE", "RUNNER", "PACKAGE"),
                     "test-native": ("DOCKER",)}
         for name, lanes in optional.items():
             for lane in lanes:

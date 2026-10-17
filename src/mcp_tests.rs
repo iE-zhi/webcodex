@@ -306,8 +306,6 @@ mod execution_control;
 mod execution_feedback;
 #[path = "mcp_tests/file_import.rs"]
 mod file_import;
-#[path = "mcp_tests/goal_plan_app.rs"]
-mod goal_plan_app;
 #[path = "mcp_tests/http_transport.rs"]
 mod http_transport;
 #[path = "mcp_tests/invocation_envelope.rs"]
@@ -320,8 +318,6 @@ mod model_ergonomics;
 mod model_surface;
 #[path = "mcp_tests/oauth_scope.rs"]
 mod oauth_scope;
-#[path = "mcp_tests/pdf_document_app.rs"]
-mod pdf_document_app;
 #[path = "mcp_tests/plugin_check.rs"]
 mod plugin_check;
 #[path = "mcp_tests/plugin_tools.rs"]
@@ -334,8 +330,6 @@ mod request_policy;
 mod resource_references;
 #[path = "mcp_tests/response.rs"]
 mod response_tests;
-#[path = "mcp_tests/result_app.rs"]
-mod result_app;
 #[path = "mcp_tests/runtime_tools.rs"]
 mod runtime_tools;
 #[path = "mcp_tests/ssh_resource.rs"]
@@ -344,10 +338,6 @@ mod ssh_resource;
 mod structured_failure;
 #[path = "mcp_tests/tools.rs"]
 mod tools;
-#[path = "mcp_tests/work_result_app.rs"]
-mod work_result_app;
-#[path = "mcp_tests/workbench_http.rs"]
-mod workbench_http;
 
 // =========================================================================
 // HTTP integration tests — exercise the real Salvo router + AuthMiddleware.
@@ -477,20 +467,6 @@ fn readiness_audit_correlation_retains_exact_jobs_without_guessing_project() {
     assert!(correlation.async_job_id.is_none());
 }
 
-#[path = "mcp_tests/workbench_app.rs"]
-mod workbench_app;
-#[path = "mcp_tests/workbench_upgrade.rs"]
-mod workbench_upgrade;
-
-#[path = "mcp_tests/work_result_thread_empty.rs"]
-mod work_result_thread_empty;
-
-#[path = "mcp_tests/resource_mentions.rs"]
-mod resource_mentions;
-
-#[path = "mcp_tests/retired_app_resources.rs"]
-mod retired_app_resources;
-
 // Stateless App policy fixture. Window-aware carrier tests keep their own explicit identity.
 async fn handle_with_app_policy(
     runtime: &ToolRuntime,
@@ -516,6 +492,3 @@ async fn handle_with_app_policy(
     )
     .await
 }
-
-#[path = "mcp_tests/docx_document_app.rs"]
-mod docx_document_app;

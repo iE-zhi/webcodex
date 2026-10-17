@@ -1567,6 +1567,64 @@ fn validate_server_url(raw: &str) -> Result<String, String> {
     Ok(parsed.as_str().trim_end_matches('/').to_string())
 }
 
+/// Read one explicitly selected, owner-protected Runner transport credential.
+///
+/// Only the already-authorized Runner process reads plaintext; it never enters
+/// ordinary project configuration, command arguments, logs or Server state.
+fn read_runner_token_file(path: &Path) -> Result<String, String> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err("token_file must be an absolute path without parent traversal".to_string());
+    }
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|_| "token_file cannot be read".to_string())?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 4096 {
+        return Err("token_file must be a regular, bounded non-symlink file".to_string());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.permissions().mode() & 0o077 != 0 || metadata.nlink() != 1 {
+            return Err("token_file must have private permissions and one hard link".to_string());
+        }
+    }
+    let credential =
+        std::fs::read_to_string(path).map_err(|_| "token_file cannot be read".to_string())?;
+    let token = credential.trim();
+    if token.len() != 73
+        || !token.starts_with("wc_agent_")
+        || !token[9..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err("token_file must contain a valid wc_agent_ credential".to_string());
+    }
+    Ok(token.to_string())
+}
+
+fn resolve_configured_runner_token(config: &mut toml::Value) -> Result<(), String> {
+    let table = config
+        .as_table_mut()
+        .ok_or("Runner config must be a TOML table")?;
+    let Some(path_value) = table.remove("token_file") else {
+        return Ok(());
+    };
+    if table.contains_key("token") {
+        return Err("token and token_file cannot both be configured".to_string());
+    }
+    let path = path_value
+        .as_str()
+        .ok_or("token_file must be a path string")?;
+    table.insert(
+        "token".to_string(),
+        toml::Value::String(read_runner_token_file(Path::new(path))?),
+    );
+    Ok(())
+}
+
 pub(crate) fn load_config(path: &Path) -> Result<RunnerConfig, String> {
     load_config_with_server_url(path, None)
 }
@@ -1579,7 +1637,11 @@ pub(crate) fn load_config_with_server_url(
         .map_err(|e| format!("failed to read config {}: {}", path.display(), e))?;
     validate_runner_config_toml_shape(&content)
         .map_err(|e| format!("failed to parse config {}: {}", path.display(), e))?;
-    let mut cfg: RunnerConfig = toml::from_str(&content)
+    let mut raw: toml::Value = toml::from_str(&content)
+        .map_err(|e| format!("failed to parse config {}: {}", path.display(), e))?;
+    resolve_configured_runner_token(&mut raw)?;
+    let mut cfg: RunnerConfig = raw
+        .try_into()
         .map_err(|e| format!("failed to parse config {}: {}", path.display(), e))?;
     if let Some(server_url) = server_url {
         cfg.server_url = validate_server_url(server_url)?;
@@ -2505,5 +2567,59 @@ pub(crate) fn project_registry_dir(cfg: &RunnerConfig) -> Result<PathBuf, String
     match &cfg.project_registry_dir {
         Some(project_registry_dir) => Ok(project_registry_dir.clone()),
         None => default_project_registry_dir(),
+    }
+}
+
+#[cfg(test)]
+mod headless_token_file_tests {
+    use super::*;
+
+    #[test]
+    fn runner_reads_owner_private_file_and_does_not_need_cli() {
+        let tmp = tempfile::tempdir().unwrap();
+        let secret = tmp.path().join("runner-token");
+        let config = tmp.path().join("runner.toml");
+        let token = format!("wc_agent_{}", "a".repeat(64));
+        std::fs::write(&secret, format!("{token}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        std::fs::write(
+            &config,
+            format!(
+            "server_url = 'https://server.example'\nclient_id = 'runner-1'\ntoken_file = '{}'\n",
+            secret.display(),
+        ),
+        )
+        .unwrap();
+        let loaded = load_config(&config).unwrap();
+        assert_eq!(loaded.token, token);
+        assert_eq!(loaded.client_id, "runner-1");
+        assert_eq!(loaded.server_url, "https://server.example");
+        // Duplicate inline plaintext and token-file authority is never accepted.
+        std::fs::write(&config, format!(
+            "server_url = 'https://server.example'\nclient_id = 'runner-1'\ntoken_file = '{}'\ntoken = '{}'\n",
+            secret.display(), token
+        )).unwrap();
+        assert!(load_config(&config).unwrap_err().contains("cannot both"));
+    }
+
+    #[test]
+    fn insecure_or_wrong_format_token_file_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let secret = tmp.path().join("token");
+        std::fs::write(&secret, format!("wc_agent_{}\n", "a".repeat(64))).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(read_runner_token_file(&secret).is_err());
+            std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        assert!(read_runner_token_file(&secret).is_ok());
+        std::fs::write(&secret, "not-a-runner-token\n").unwrap();
+        assert!(read_runner_token_file(&secret).is_err());
     }
 }

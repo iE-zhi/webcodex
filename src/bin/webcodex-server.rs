@@ -28,23 +28,53 @@ fn build_server_runtime() -> std::io::Result<tokio::runtime::Runtime> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // The binary owns simple configuration checks; there is no separate CLI.
+    let config_file = match args.as_slice() {
+        [flag, path] if flag == "--config" && !path.is_empty() => Some(path.clone()),
+        [flag, path, check]
+            if flag == "--config" && check == "--check-config" && !path.is_empty() =>
+        {
+            Some(path.clone())
+        }
+        [check, flag, path]
+            if check == "--check-config" && flag == "--config" && !path.is_empty() =>
+        {
+            Some(path.clone())
+        }
+        _ => None,
+    };
+    let check_config = args.iter().any(|arg| arg == "--check-config");
+    if let Some(path) = config_file {
+        std::env::set_var("WEBCODEX_SERVER_CONFIG", path);
+        args.clear();
+    } else if check_config && args.len() == 1 {
+        args.clear();
+    }
+    if check_config && args.is_empty() {
+        webcodex::validate_server_configuration().map_err(std::io::Error::other)?;
+        println!("Server TOML configuration valid");
+        return Ok(());
+    }
     let service = webcodex_environment::runtime_entry::split_windows_service_args(&args)
         .map_err(std::io::Error::other)?;
     if let Some((name, service_args)) = service {
         #[cfg(windows)]
         {
             if service_args.len() != 2
-                || service_args[0] != "--env-file"
+                || !matches!(service_args[0].as_str(), "--env-file" | "--config")
                 || service_args[1].is_empty()
             {
-                return Err(
-                    std::io::Error::other("Server service requires only --env-file PATH").into(),
-                );
+                return Err(std::io::Error::other(
+                    "Server service requires --config PATH or legacy --env-file PATH",
+                )
+                .into());
             }
             let env_file = std::path::PathBuf::from(&service_args[1]);
-            webcodex_environment::runtime_entry::validate_service_env_file(&env_file)
-                .map_err(std::io::Error::other)?;
+            if service_args[0] == "--env-file" {
+                webcodex_environment::runtime_entry::validate_service_env_file(&env_file)
+                    .map_err(std::io::Error::other)?;
+            }
             return webcodex_environment::service::runtime::run_windows_service(
                 &name,
                 move |stop| {
@@ -57,7 +87,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         webcodex_environment::service::Component::Server,
                     )?;
                     std::env::set_var("WEBCODEX_SERVICE_LOG_DIR", log_dir);
-                    std::env::set_var("WEBCODEX_ENV_FILE", &env_file);
+                    if service_args[0] == "--config" {
+                        std::env::set_var("WEBCODEX_SERVER_CONFIG", &env_file);
+                    } else {
+                        std::env::set_var("WEBCODEX_ENV_FILE", &env_file);
+                    }
                     webcodex::prepare_server_process_environment()?;
                     let result = build_server_runtime()
                         .map_err(|error| error.to_string())?

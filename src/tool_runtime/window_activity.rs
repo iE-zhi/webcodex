@@ -7,7 +7,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 pub(crate) const MAX_ACTIVE_WINDOW_REQUESTS: usize = 64;
-pub(crate) const MAX_ACTIVE_REQUESTS_PER_WINDOW: usize = 8;
 pub(crate) const MAX_WINDOW_LOOP_CONTINUITIES: usize = 256;
 const MAX_UNTRACKED_ACTIVE_PRINCIPALS: usize = 64;
 
@@ -130,21 +129,6 @@ impl ActiveWindowRequest {
     pub(crate) fn is_meaningful(&self) -> bool {
         self.meaningful
     }
-
-    pub(crate) fn principal_correlation(&self) -> Option<(&str, &str)> {
-        Some((
-            self.principal_correlation_kind.as_deref()?,
-            self.principal_correlation_id.as_deref()?,
-        ))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ActiveWindowSummary {
-    pub(crate) client_window_key: String,
-    pub(crate) client_window_source: String,
-    pub(crate) active_count: usize,
-    pub(crate) last_started_at_ms: i64,
 }
 
 #[derive(Debug, Default)]
@@ -518,40 +502,6 @@ impl WindowActivityRegistry {
         Some(commit())
     }
 
-    pub(crate) fn active_windows(
-        &self,
-        principal: Option<(&str, &str)>,
-    ) -> Vec<ActiveWindowSummary> {
-        let inner = self.inner.lock().expect("Window activity mutex poisoned");
-        let mut summaries = BTreeMap::<String, ActiveWindowSummary>::new();
-        for request in inner
-            .by_trace
-            .values()
-            .filter(|request| principal_visible(request, principal))
-        {
-            summaries
-                .entry(request.client_window_key.clone())
-                .and_modify(|summary| {
-                    summary.active_count = summary.active_count.saturating_add(1);
-                    summary.last_started_at_ms =
-                        summary.last_started_at_ms.max(request.started_at_ms);
-                })
-                .or_insert_with(|| ActiveWindowSummary {
-                    client_window_key: request.client_window_key.clone(),
-                    client_window_source: request.client_window_source.clone(),
-                    active_count: 1,
-                    last_started_at_ms: request.started_at_ms,
-                });
-        }
-        let mut values = summaries.into_values().collect::<Vec<_>>();
-        values.sort_by(|a, b| {
-            b.last_started_at_ms
-                .cmp(&a.last_started_at_ms)
-                .then_with(|| a.client_window_key.cmp(&b.client_window_key))
-        });
-        values
-    }
-
     #[cfg(test)]
     pub(crate) fn counts_by_window(
         &self,
@@ -724,13 +674,6 @@ fn principal_visible(request: &ActiveWindowRequest, principal: Option<(&str, &st
                 && request.principal_correlation_id.as_deref() == Some(id)
         }
     }
-}
-
-pub(crate) fn active_window_request_matches_principal(
-    request: &ActiveWindowRequest,
-    principal: (&str, &str),
-) -> bool {
-    principal_visible(request, Some(principal))
 }
 
 pub(crate) async fn window_project_visible_cached(
@@ -1430,10 +1373,6 @@ mod tests {
         }
         assert!(registry.coverage_partial_for(Some(("username", "alice"))));
         assert!(!registry.coverage_partial_for(Some(("username", "bob"))));
-        assert_eq!(
-            registry.active_windows(None).len(),
-            MAX_ACTIVE_WINDOW_REQUESTS
-        );
         guards
             .remove(0)
             .complete(completion(1_000, 10_000), true, true);

@@ -22,16 +22,31 @@ pub(crate) const TOOL_SURFACE_AVAILABILITY_DIRECT: &str = "direct";
 pub(crate) const TOOL_SURFACE_AVAILABILITY_GATEWAY: &str = "gateway";
 pub(crate) const TOOL_SURFACE_AVAILABILITY_UNAVAILABLE: &str = "unavailable";
 
+/// 仅自动续跑载体必须通过带 MCP App 资源描述符的直接工具调用。
+///
+/// # 参数
+/// - `tool_name`：精确的 MCP 工具名称；普通无界面工具可通过统一入口调用。
 pub(crate) fn tool_requires_direct_app_presentation(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "present_work_result"
-            | "present_pdf"
+        "present_agent_continuation" | "present_job_terminal_continuation"
+    )
+}
+
+/// 纯展示工具已从 Headless MCP 移除，保留底层 parser/旧 API 兼容能力。
+///
+/// # 参数
+/// - `tool_name`：待查询的 MCP 工具名称。
+pub(crate) fn is_retired_display_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "present_pdf"
             | "present_docx"
             | "present_spreadsheet"
+            | "present_work_result"
             | "present_goal_plan"
-            | "present_agent_continuation"
-            | "present_job_terminal_continuation"
+            | "open_webcodex_workbench"
+            | "work_result_thread_panel"
     )
 }
 
@@ -65,7 +80,7 @@ pub(crate) fn adaptive_runtime_tool_invocation_route_with_operator_extension(
             Some(ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME),
         );
     }
-    if !is_model_visible_tool_name(tool_name) {
+    if is_retired_display_tool(tool_name) || !is_model_visible_tool_name(tool_name) {
         return (TOOL_SURFACE_AVAILABILITY_UNAVAILABLE, None);
     }
     if is_adaptive_runtime_direct_tool(tool_name) {
@@ -460,6 +475,7 @@ pub(crate) fn adaptive_runtime_direct_tool_descriptors() -> Vec<ToolDescriptor> 
             .collect();
     adaptive_runtime_direct_tool_definitions()
         .into_iter()
+        .filter(|definition| !is_retired_display_tool(definition.name))
         .map(|definition| {
             by_name.remove(definition.name).unwrap_or_else(|| {
                 panic!(
@@ -517,16 +533,21 @@ mod tests {
     #[test]
     fn direct_app_presentation_requirement_is_closed_and_explicit() {
         for tool in [
-            "present_work_result",
-            "present_pdf",
-            "present_spreadsheet",
-            "present_goal_plan",
             "present_agent_continuation",
             "present_job_terminal_continuation",
         ] {
             assert!(tool_requires_direct_app_presentation(tool), "{tool}");
         }
-        for ordinary in ["run_shell", "run_script", "read_workspace_changes"] {
+        for ordinary in [
+            "run_shell",
+            "run_script",
+            "read_workspace_changes",
+            "present_pdf",
+            "present_docx",
+            "present_spreadsheet",
+            "present_work_result",
+            "present_goal_plan",
+        ] {
             assert!(
                 !tool_requires_direct_app_presentation(ordinary),
                 "{ordinary}"
@@ -536,9 +557,11 @@ mod tests {
 
     #[test]
     fn direct_specs_are_definition_derived_and_model_visible() {
+        // MCP ToolDefinitions are still authoritative, minus retired UI surfaces.
         let specs = adaptive_runtime_direct_tool_specs();
         let expected = adaptive_runtime_direct_tool_definitions()
             .into_iter()
+            .filter(|definition| !is_retired_display_tool(definition.name))
             .map(|definition| definition.name)
             .collect::<Vec<_>>();
         let actual = specs

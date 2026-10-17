@@ -2,13 +2,11 @@ mod app_registry;
 mod discovery;
 mod execution_control;
 mod http_metadata;
-mod presentation;
 mod protocol;
 mod request_policy;
 mod resources;
 mod response;
 mod tools;
-mod workbench;
 
 #[cfg(test)]
 pub(crate) use tools::adaptive_runtime_gateway_input_schema_for_test;

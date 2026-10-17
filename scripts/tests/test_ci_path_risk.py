@@ -28,52 +28,13 @@ class PathRiskFixtureTests(unittest.TestCase):
         self.assertEqual(result["needs_windows"], "false")
         self.assertEqual(result["needs_macos"], "false")
         self.assertEqual(result["needs_docker"], "false")
-        self.assertEqual(result["needs_frontend"], "false")
-        self.assertEqual(result["needs_desktop_frontend"], "false")
         self.assertEqual(result["needs_plugin_sdk"], "false")
-
-    def test_main_frontend_isolated_from_native_and_desktop_frontend(self) -> None:
-        result = classify("frontend/src/runtime.ts")
-        self.assertEqual(result["needs_frontend"], "true")
-        self.assertEqual(result["needs_desktop_frontend"], "false")
-        self.assertEqual(result["needs_windows"], "false")
-        self.assertEqual(result["needs_macos"], "false")
-
-    def test_shared_frontend_source_and_dependencies_also_check_desktop(self) -> None:
-        for path in (
-            "frontend/src/ui/ProjectPicker.tsx",
-            "frontend/src/ui/foundation.css",
-            "frontend/package.json",
-            "frontend/package-lock.json",
-        ):
-            with self.subTest(path=path):
-                result = classify(path)
-                self.assertEqual(result["needs_frontend"], "true")
-                self.assertEqual(result["needs_desktop_frontend"], "true")
-                self.assertEqual(result["needs_windows"], "false")
-                self.assertEqual(result["needs_macos"], "false")
-
-    def test_desktop_frontend_isolated_from_main_frontend_and_native(self) -> None:
-        result = classify("apps/desktop/src/main.tsx")
-        self.assertEqual(result["needs_frontend"], "false")
-        self.assertEqual(result["needs_desktop_frontend"], "true")
-        self.assertEqual(result["needs_windows"], "false")
-        self.assertEqual(result["needs_macos"], "false")
-
-    def test_desktop_rust_requires_windows_macos_and_desktop_packages(self) -> None:
-        result = classify("apps/desktop/src-tauri/src/process/supervisor.rs")
-        self.assertEqual(result["needs_windows_desktop"], "true")
-        self.assertEqual(result["needs_macos"], "true")
-        self.assertEqual(result["needs_macos_desktop"], "true")
-        self.assertEqual(result["needs_desktop_package"], "true")
-        self.assertEqual(result["needs_desktop_frontend"], "false")
 
     def test_codex_python_adapter_requires_windows_core_only(self) -> None:
         result = classify("integrations/codex/platform_security.py")
         self.assertEqual(result["needs_windows_core"], "true")
         self.assertEqual(result["needs_windows_runner"], "false")
         self.assertEqual(result["needs_windows_package"], "false")
-        self.assertEqual(result["needs_windows_desktop"], "false")
         self.assertEqual(result["needs_macos"], "false")
         self.assertEqual(result["needs_full_native"], "false")
         self.assertIn("codex-adapter", result["categories"])
@@ -82,16 +43,13 @@ class PathRiskFixtureTests(unittest.TestCase):
         result = classify("crates/webcodex-process/src/lib.rs")
         self.assertEqual(result["needs_windows_core"], "true")
         self.assertEqual(result["needs_macos"], "true")
-        self.assertEqual(result["needs_desktop_package"], "false")
 
     def test_production_warning_gate_script_requires_native_core_lanes(self) -> None:
         result = classify("scripts/check_production_warnings.py")
         self.assertEqual(result["needs_windows_core"], "true")
         self.assertEqual(result["needs_windows_runner"], "false")
         self.assertEqual(result["needs_windows_package"], "false")
-        self.assertEqual(result["needs_windows_desktop"], "false")
         self.assertEqual(result["needs_macos"], "true")
-        self.assertEqual(result["needs_macos_desktop"], "false")
         self.assertEqual(result["needs_full_native"], "false")
         self.assertIn("production-warning-gate", result["categories"])
 
@@ -100,14 +58,7 @@ class PathRiskFixtureTests(unittest.TestCase):
         self.assertEqual(result["needs_windows_runner"], "true")
         self.assertEqual(result["needs_macos"], "true")
 
-    def test_desktop_package_manifest_requires_frontend_and_native_desktop(self) -> None:
-        result = classify("apps/desktop/package-lock.json")
-        self.assertEqual(result["needs_desktop_frontend"], "true")
-        self.assertEqual(result["needs_frontend"], "false")
-        self.assertEqual(result["needs_windows_desktop"], "true")
-        self.assertEqual(result["needs_macos_desktop"], "true")
-
-    def test_plugin_sdk_isolated_from_native_frontend_desktop_and_docker(self) -> None:
+    def test_plugin_sdk_isolated_from_native_and_docker(self) -> None:
         for path in (
             "npm/plugin-sdk/src/runtime.ts",
             "npm/plugin-sdk/README.md",
@@ -120,8 +71,6 @@ class PathRiskFixtureTests(unittest.TestCase):
                 self.assertEqual(result["needs_windows"], "false")
                 self.assertEqual(result["needs_macos"], "false")
                 self.assertEqual(result["needs_docker"], "false")
-                self.assertEqual(result["needs_frontend"], "false")
-                self.assertEqual(result["needs_desktop_frontend"], "false")
                 self.assertIn("plugin-sdk", result["categories"])
 
     def test_first_party_plugin_dogfood_uses_plugin_sdk_contract_lane(self) -> None:
@@ -152,14 +101,11 @@ class PathRiskFixtureTests(unittest.TestCase):
                 self.assertEqual(result["needs_windows"], "false")
                 self.assertEqual(result["needs_macos"], "false")
                 self.assertEqual(result["needs_docker"], "false")
-                self.assertEqual(result["needs_frontend"], "false")
-                self.assertEqual(result["needs_desktop_frontend"], "false")
                 self.assertIn("plugin-sdk-dogfood", result["categories"])
 
     def test_npm_installer_change_requires_native_windows_package_lane(self) -> None:
         result = classify("npm/webcodex/install.js")
         self.assertEqual(result["needs_windows_package"], "true")
-        self.assertEqual(result["needs_windows_desktop"], "false")
         self.assertEqual(result["needs_macos"], "false")
 
     def test_runner_shell_and_persistent_shell_require_windows_and_macos(self) -> None:
@@ -188,32 +134,13 @@ class PathRiskFixtureTests(unittest.TestCase):
                 self.assertEqual(result["needs_windows_runner"], "true")
                 self.assertEqual(result["needs_macos"], "true")
 
-    def test_windows_installer_and_npm_package_choose_windows_package_lanes(self) -> None:
-        desktop = classify("scripts/desktop_install_windows_smoke.ps1")
-        self.assertEqual(desktop["needs_windows_desktop"], "true")
-        self.assertEqual(desktop["needs_windows_package"], "true")
-        self.assertEqual(desktop["needs_desktop_package"], "true")
-        self.assertEqual(desktop["needs_macos"], "false")
-
-        npm = classify("scripts/npm_install_windows_smoke.ps1")
-        self.assertEqual(npm["needs_windows_package"], "true")
-        self.assertEqual(npm["needs_windows_desktop"], "false")
-
-        msi = classify("packaging/windows/webcodex-desktop.msi")
-        self.assertEqual(msi["needs_windows_package"], "true")
-        self.assertEqual(msi["needs_windows_desktop"], "true")
-        self.assertEqual(msi["needs_macos"], "false")
-
-    def test_macos_packaging_is_macos_only(self) -> None:
-        result = classify("scripts/prepare_desktop_bundle_macos.py")
-        self.assertEqual(result["needs_macos"], "true")
-        self.assertEqual(result["needs_macos_desktop"], "true")
-        self.assertEqual(result["needs_windows"], "false")
-
-        dmg = classify("packaging/macos/WebCodex.dmg")
-        self.assertEqual(dmg["needs_macos"], "true")
-        self.assertEqual(dmg["needs_macos_desktop"], "true")
-        self.assertEqual(dmg["needs_windows"], "false")
+    def test_native_package_changes_select_os_lanes(self) -> None:
+        windows = classify("scripts/npm_install_windows_smoke.ps1")
+        self.assertEqual(windows["needs_windows_package"], "true")
+        self.assertEqual(windows["needs_macos"], "false")
+        macos = classify("packaging/macos/agent.pkg")
+        self.assertEqual(macos["needs_macos"], "true")
+        self.assertEqual(macos["needs_windows"], "false")
 
     def test_server_container_files_require_only_daily_amd64_docker_smoke(self) -> None:
         for path in ("Dockerfile", ".dockerignore", "compose.yaml", "compose.build.yaml", "deploy/docker/bootstrap.sh"):
@@ -232,15 +159,11 @@ class PathRiskFixtureTests(unittest.TestCase):
             "scripts/macos_sign_runner.sh",
             "scripts/macos_ci_signing_setup.sh",
             "scripts/macos_sign_self_signed.sh",
-            "scripts/macos_finalize_desktop.sh",
-            "scripts/macos_finalize_dmg.sh",
-            "scripts/verify_macos_desktop_identity.sh",
         ):
             with self.subTest(path=path):
                 result = classify(path)
                 self.assertEqual(result["needs_full_native"], "true")
                 self.assertEqual(result["needs_docker"], "true")
-                self.assertEqual(result["needs_macos_desktop"], "true")
 
     def test_any_workflow_policy_change_is_full_native(self) -> None:
         result = classify(".github/workflows/future-native-policy.yml")
@@ -301,8 +224,6 @@ class InvocationOverrideFixtureTests(unittest.TestCase):
         result = forced.outputs()
         self.assertEqual(result["needs_full_native"], "true")
         self.assertIn("override-run-ci", result["reason"])
-        self.assertEqual(result["needs_frontend"], "true")
-        self.assertEqual(result["needs_desktop_frontend"], "true")
         self.assertEqual(result["needs_plugin_sdk"], "true")
 
     def test_push_main_uses_path_classifier(self) -> None:
@@ -421,8 +342,6 @@ class GitRangeIntegrationTests(unittest.TestCase):
         self.assertEqual(result["needs_windows_core"], "true")
         self.assertEqual(result["needs_macos"], "true")
         self.assertEqual(result["needs_windows_package"], "false")
-        self.assertEqual(result["needs_windows_desktop"], "false")
-        self.assertEqual(result["needs_macos_desktop"], "false")
         self.assertIn("platform-context-bounded", result["categories"])
 
     def test_changed_path_bound_still_falls_back_to_full_native(self) -> None:
@@ -469,8 +388,6 @@ class GitRangeIntegrationTests(unittest.TestCase):
             self.assertEqual(result["needs_windows_runner"], "true")
             self.assertEqual(result["needs_macos"], "true")
             self.assertEqual(result["needs_windows_package"], "false")
-            self.assertEqual(result["needs_windows_desktop"], "false")
-            self.assertEqual(result["needs_macos_desktop"], "false")
             self.assertEqual(result["needs_docker"], "false")
 
     def test_real_git_rename_is_observed_as_delete_plus_add_and_upgrades_risk(self) -> None:

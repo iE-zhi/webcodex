@@ -14,17 +14,15 @@ RUN apt-get update \
 
 COPY . .
 
-# The server image also contains the webcodex CLI so server-side pairing and
-# administration can be run with `docker compose exec webcodex webcodex ...`.
-# webcodex-runner is intentionally not built into this image. Git metadata is
-# supplied as build args because .git is intentionally outside the build context.
+# Headless Server-only image; Runner is a separate native service.
+# Configuration comes from server.toml or the backward-compatible env.
 ARG WEBCODEX_GIT_COMMIT
 ARG WEBCODEX_GIT_DIRTY
 ARG WEBCODEX_BUILT_AT
 RUN WEBCODEX_GIT_COMMIT="$WEBCODEX_GIT_COMMIT" \
     WEBCODEX_GIT_DIRTY="$WEBCODEX_GIT_DIRTY" \
     WEBCODEX_BUILT_AT="$WEBCODEX_BUILT_AT" \
-    cargo build --locked --release --bins -p webcodex -p webcodex-cli
+    cargo build --locked --release --bin webcodex-server -p webcodex
 
 FROM debian:bookworm-slim AS runtime
 
@@ -41,7 +39,6 @@ RUN apt-get update \
     && install -d -o webcodex -g webcodex -m 0700 /var/lib/webcodex
 
 COPY --from=builder /src/target/release/webcodex-server /usr/local/bin/webcodex-server
-COPY --from=builder /src/target/release/webcodex /usr/local/bin/webcodex
 
 ENV WEBCODEX_ADDR=0.0.0.0:8080 \
     WEBCODEX_DATA=/var/lib/webcodex \

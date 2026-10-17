@@ -358,6 +358,7 @@ class UnifiedInstallerTests(unittest.TestCase):
                 pkg.rpm_spec(parsed, root)
 
 
+    @unittest.skipUnless(os.name == "posix" and os.uname().sysname == "Linux", "native RPM packaging requires Linux")
     def test_rpm_arm64_dry_run_uses_native_rpm_arch_and_same_payload_contract(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

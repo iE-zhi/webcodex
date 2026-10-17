@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
+# macOS local shells may omit rustup cargo from PATH; GitHub Rust actions set this already.
+if [ -x "$HOME/.cargo/bin/cargo" ]; then export PATH="$HOME/.cargo/bin:$PATH"; fi
+
 python3 - <<'PY'
 from pathlib import Path
 

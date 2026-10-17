@@ -17,22 +17,15 @@ class ReleaseDoctorTests(unittest.TestCase):
         detail = doctor._platform_contract(Path.cwd())
         self.assertIn("darwin-x64", detail)
         self.assertIn("win32-arm64", detail)
-        self.assertIn("primary Desktop darwin-arm64, win32-x64, win32-arm64", detail)
-        self.assertIn("supplemental Desktop darwin-x64", detail)
+        self.assertIn("two-binary Server/Runner", detail)
         workflow = doctor._workflow_contract(Path.cwd())
         self.assertIn("authoritative build", workflow)
-        self.assertIn("persistent macOS release signing", workflow)
+        self.assertIn("Computer/Runner", workflow)
 
-    def test_version_contract_rejects_desktop_mismatch(self) -> None:
-        versions = {
-            "cargo": VERSION,
-            "npm": VERSION,
-            "desktop_package": "0.3.9",
-            "desktop_cargo": VERSION,
-            "desktop_tauri": VERSION,
-        }
+    def test_version_contract_rejects_runtime_mismatch(self) -> None:
+        versions = {"cargo": "0.3.9"}
         with mock.patch.object(publication, "_package_versions", return_value=versions), self.assertRaisesRegex(
-            doctor.DoctorError, "desktop_package=0.3.9"
+            doctor.DoctorError, "cargo=0.3.9"
         ):
             doctor._version_contract(Path.cwd(), VERSION)
 
