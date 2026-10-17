@@ -1,11 +1,13 @@
 /** 隔离页面观察器：只唤醒扩展读取公开状态，并转发真实 Stop；不持有 PAT、任务或发送权。 */
 (() => {
   /** 同一隔离文档只允许一个观察器；扩展更新先释放旧监听，重复注入不增加心跳。 */
-  const KEY = '__webcodexContinuationObserver', VERSION = '4';
+  const KEY = '__webcodexContinuationObserver', VERSION = '5';
   if (globalThis[KEY]?.version === VERSION) return;
   globalThis[KEY]?.dispose?.();
   /** 每文档最多每秒一个活动通知，十五秒一个心跳；后台标签仍受 Chrome 调度限制。 */
   const EVENT_GAP_MS = 1000, HEARTBEAT_MS = 15000;
+  /** 每次最多核对 32 个输入框候选；首发正文最多 128 KiB UTF-8，超限不记录启用意图。 */
+  const MAX_EDITORS = 32, MAX_INTENT_BYTES = 131072;
   /** 当前文档只有一个在途通知；普通变化合并，真实 Stop 独立立即提交。 */
   let pending = false, timer = null, last = 0, closed = false;
 
@@ -29,12 +31,21 @@
     }
   }
 
+  /** 只读取唯一可见聊天输入框，兼容旧 ID 与新版聊天表单；多候选或隐藏区域返回 null。 */
+  function composer() {
+    const candidates = document.querySelectorAll('#prompt-textarea,form[data-chatgpt-composer] [role="textbox"][contenteditable="true"].ProseMirror');
+    if (candidates.length > MAX_EDITORS) return null;
+    const visible = Array.from(candidates).filter(editor => editor.getClientRects().length > 0 &&
+      !editor.closest('[hidden],[aria-hidden="true"],[inert]'));
+    return visible.length === 1 ? visible[0] : null;
+  }
+
   /** 只在空白聊天真实点击发送或按 Enter 时记录首发意图；正文只用于 worker 比较摘要。 */
   function firstSend(event) {
     if (closed || !event.isTrusted || !/^(?:\/g\/[A-Za-z0-9_-]+)?\/?$/.test(location.pathname)) return;
-    const editor = document.querySelector('#prompt-textarea');
+    const editor = composer();
     const text = editor?.innerText ?? editor?.value;
-    if (typeof text !== 'string' || new TextEncoder().encode(text).length > 131072) return;
+    if (typeof text !== 'string' || new TextEncoder().encode(text).length > MAX_INTENT_BYTES) return;
     send({ event: 'webcodex_intent', text });
   }
 
@@ -56,7 +67,7 @@
   function clicked(event) {
     const button = event.target?.closest?.('button');
     if (event.isTrusted && button?.matches('[data-testid="stop-button"],button[aria-label="Stop streaming"],button[aria-label="停止生成"]')) notify(true);
-    else if (button?.matches('[data-testid="send-button"],#composer-submit-button') && !button.disabled && button.getAttribute('aria-disabled') !== 'true') firstSend(event);
+    else if (button?.matches('[data-testid="send-button"],#composer-submit-button,form[data-chatgpt-composer] button[type="submit"]') && !button.disabled && button.getAttribute('aria-disabled') !== 'true') firstSend(event);
     else if (event.isTrusted && event.target?.closest?.('a[href]')) {
       // 人工导航不属于首次发送，撤销预置；不会触碰已存在的 Server 任务。
       send({ event: 'webcodex_prearm_cancel' });
@@ -64,7 +75,7 @@
   }
   /** Enter 只观察真实、不组合输入的发送操作；合成事件不授予首次发送意图。 */
   function keydown(event) {
-    if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing && event.target?.closest?.('#prompt-textarea')) firstSend(event);
+    if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing && composer()?.contains(event.target)) firstSend(event);
   }
   /** 用户返回历史页面会撤销预置，网站合成 popstate 不取得控制权。 */
   function navigated(event) { if (event.isTrusted) send({ event: 'webcodex_prearm_cancel' }); }

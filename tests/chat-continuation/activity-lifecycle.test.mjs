@@ -21,9 +21,11 @@ function fixture(mode = 'ok') {
     if (mode === 'temporary') return Promise.reject(new Error('Receiving end does not exist.'));
     return Promise.resolve();
   } };
+  /** 唯一可见的输入框 fake；contains 只接受本输入框，不以任意 closest 返回值冒充编辑器。 */
+  const editor = { innerText: 'first request', getClientRects() { return [{}]; }, closest() { return null; }, contains(node) { return node === editor; } };
   const sandbox = {
     chrome: { runtime }, location: { pathname: '/' }, TextEncoder,
-    document: { ...target(documentEvents), querySelector() { return { innerText: 'first request' }; } },
+    document: { ...target(documentEvents), querySelectorAll() { return [editor]; } },
     window: target(windowEvents), console: { warn(message) { warnings.push(message); } },
     MutationObserver: class {
       /** callback 为生产变化通知；夹具保留它以验证清理后晚到通知不能恢复计时器。 */
@@ -50,7 +52,7 @@ function fixture(mode = 'ok') {
     trigger(kind) {
       if (kind === 'heartbeat') return intervals.values().next().value?.();
       if (kind === 'popstate') return windowEvents.get('popstate')?.({ isTrusted: true });
-      if (kind === 'enter') return documentEvents.get('keydown')?.({ key: 'Enter', isTrusted: true, target: { closest() { return {}; } } });
+      if (kind === 'enter') return documentEvents.get('keydown')?.({ key: 'Enter', isTrusted: true, target: editor });
       const button = { disabled: false, getAttribute() { return null; }, matches(selector) { return kind === 'stop' ? selector.includes('stop-button') : kind === 'send' && selector.includes('send-button'); } };
       documentEvents.get('click')?.({ isTrusted: true, target: { closest(selector) { return selector === 'button' ? button : kind === 'navigate' ? {} : null; } } });
     },

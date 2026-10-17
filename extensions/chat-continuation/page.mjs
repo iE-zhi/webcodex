@@ -37,9 +37,18 @@ export async function pageAction(action = 'snapshot', input = null) {
     return { cancelled: true };
   }
 
+  /** 只接受唯一可见的聊天输入框；兼容旧 ID 和新版聊天表单，隐藏或多输入框均不授予发送权。 */
+  function composer() {
+    const candidates = document.querySelectorAll('#prompt-textarea,form[data-chatgpt-composer] [role="textbox"][contenteditable="true"].ProseMirror');
+    if (candidates.length > MAX_NODES) return null;
+    const visible = Array.from(candidates).filter(editor => editor.getClientRects().length > 0 &&
+      !editor.closest('[hidden],[aria-hidden="true"],[inert]'));
+    return visible.length === 1 ? visible[0] : null;
+  }
+
   /** 识别输入框所属区域的附件及上传状态；没有文字的附件同样属于人工草稿。 */
   function attachments() {
-    const editor = document.querySelector('#prompt-textarea');
+    const editor = composer();
     const host = editor?.closest('form') || editor?.parentElement;
     if (!host) return false;
     if (host.querySelector?.('[data-composer-attachments]')?.childElementCount > 0) return true;
@@ -123,7 +132,7 @@ export async function pageAction(action = 'snapshot', input = null) {
   function snapshot() {
     const route = location.pathname.match(/^(?:\/g\/[^/]+)?\/c\/([a-f\d-]{36})\/?$/i);
     const conversation = route?.[1] || null;
-    const editor = document.querySelector('#prompt-textarea');
+    const editor = composer();
     const busy = Boolean(document.querySelector('[data-testid="stop-button"],button[aria-label="Stop streaming"],button[aria-label="停止生成"]')) ||
       [...(editor?.closest('form')?.querySelectorAll('button svg path') || [])].some(path => /^\s*M4\.5 5\.75/.test(path.getAttribute('d') || ''));
     const base = { url: location.href, supported: false, busy, draft: Boolean(editor?.textContent?.trim()) || attachments(),
@@ -233,7 +242,7 @@ export async function pageAction(action = 'snapshot', input = null) {
       !page.supported || page.url !== input.url || page.userId !== input.userId ||
       page.userText !== input.userText || page.reply?.id !== input.replyId || page.reply?.text !== input.replyText ||
       (!page.reply?.terminal && input.recovery !== true) || page.busy || page.draft || page.blocked || page.approval || page.toolsBusy || page.activity.stop_requested || page.activity.rate_limited || activity.cancelled.has(input.id)) return { sent: false, definite: true, cleared: !page.draft, reason: 'preflight' };
-  const editor = document.querySelector('#prompt-textarea');
+  const editor = composer();
   if (!editor?.isContentEditable) return { sent: false, definite: true, cleared: true, reason: 'editor' };
   /** 只清理本次插入且用户未改动的正文；存在附件或用户编辑时保持原样并拒绝重试。 */
   function unsent(reason) {
@@ -260,9 +269,15 @@ export async function pageAction(action = 'snapshot', input = null) {
         current.reply?.id !== input.replyId || current.reply?.text !== input.replyText || (!current.reply?.terminal && input.recovery !== true) || current.busy || current.blocked || current.approval || current.toolsBusy ||
         current.activity.stop_requested || current.activity.rate_limited || attachments() || activity.cancelled.has(input.id) ||
         editor.innerText.replace(/\r/g, '') !== input.text || !editor.isConnected) return unsent('changed');
-    const send = document.querySelector('[data-testid="send-button"],#composer-submit-button');
-    if (send && !send.disabled && send.getAttribute('aria-disabled') !== 'true' && !send.closest('[hidden]')) {
-      send.click();
+    // 仅在刚核对的输入框所属表单中找发送按钮；新版 submit 后备不能命中页面其他表单。
+    const host = editor.closest('form') || editor.parentElement;
+    const selector = '[data-testid="send-button"],#composer-submit-button' + (host?.hasAttribute('data-chatgpt-composer') ? ',button[type="submit"]' : '');
+    const buttons = host?.querySelectorAll(selector) || [];
+    if (buttons.length > MAX_NODES) return unsent('send_button');
+    const available = Array.from(buttons).filter(button => !button.disabled && button.getAttribute('aria-disabled') !== 'true' &&
+      button.getClientRects().length > 0 && !button.closest('[hidden],[aria-hidden="true"],[inert]'));
+    if (available.length === 1) {
+      available[0].click();
       // 点击仅表示已尝试；worker 仍须从公开模型核对 WC_SEND 回执。
       return { sent: true };
     }
