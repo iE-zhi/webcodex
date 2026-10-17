@@ -1,66 +1,34 @@
-# AGENTS.md — WebCodex Repository Rules
+# 工程执行规则
 
-These rules govern work on the WebCodex source repository with the current host's available tools. A deeper `AGENTS.md` governs its directory. Load linked domain guidance only when the task reaches that boundary. The builtin `webcodex.workflow` guides callers of a connected WebCodex runtime; it is not a prerequisite for local checkout work. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contributor setup and validation.
+本规则适用于代码、文档、配置、测试、部署及自动化任务，以下要求均为强制执行项。
 
-WebCodex is actively developed. Features, fixes, and reliability work are welcome, but preserve credential, process-tree, transport, durability, authority, replay-safety, and boundedness contracts.
+## 1. 开工规划
 
-## 1. Product and authority invariants
+- 每轮对话开始时，必须先完整读取本项目 `AGENTS.md`，再处理请求，避免遗漏项目规则；每次回复必须注明“已阅读AGENTS.md”。
+- 先读取适用规则和必要上下文，明确目标、范围、约束、依赖、风险及验收方式，再确定实现方向与执行顺序；规划详略与任务复杂度匹配。
+- 将全局规格、用户指令、适用的 `AGENTS.md`、已触发技能、语言规则和仓库约定逐条纳入精简的内部检查清单，标明来源、适用范围及验证方式。不得自行忽略、降级或省略任何规则；仅可依据规则明确的适用条件或指令优先级判定不适用，并记录依据。
+- 先验证关键假设；证据与规划不符时，先调整方向再继续，避免沿错误路径反复试错。
 
-- Protect real authority boundaries: credentials, public entry points, destructive actions, execution targets, process ownership, history, and published artifacts. Model new credential audiences, scopes, identities, leases, and replaceable targets explicitly; stale requests must not retarget or gain authority.
-- Never print, commit, or expose credentials, authorization headers, private keys, tokens, secret files, or sensitive command output.
-- Structured execution lifecycle state owns retry safety. Semantic ambiguity, authority changes, stale fences, replay uncertainty, and uncertain effects fail closed; presentation or model ergonomics never override execution authority.
-- Keep one canonical machine representation per fact or follow-up. Static/internal taxonomies and forensic bookkeeping belong in runtime types, tests, telemetry, or exceptional diagnostics rather than duplicate model-facing fields. Model-facing compatibility requires a named concrete consumer; historical aliases are not retained merely because an older implementation emitted them.
-- HTTP/MCP requests are stateless unless the exact adapter contract supplies a stable `ClientWindow`. Never infer Workflow Session, model-context retention, or authority from transport/audit IDs, credentials, Projects, or prior requests.
-- Keep Connector Tasks, Workflow Sessions, durable Agents/Conversations/Wakes, and Agent Tasks distinct. Persistence of identity or history is not permission to replay an effect.
-- Keep core execution and Job semantics protocol-, UI-, transport-, and OS-neutral. Host-specific behavior, including MCP App orchestration, belongs in explicit adapters.
-- Boundedness is a correctness property for model surfaces, logs, persistence, scans, queues, and retained state. Do not turn ergonomic limits into authority bypasses or silently widen resource contracts.
+## 2. 实施范围
 
-Product direction: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+- 优先复用现有实现，选择满足要求的最小改动，避免无效探索、重复劳动和无关重构。
+- 实现前，列出所有涉及的文件、类型、字段、常量、函数及参数、指针、缓冲区、句柄、外部输入、系统调用、错误路径、资源清理路径、测试和文档章节。
+- 范围变化及修改文件前，对照当前用户要求与规则清单复核，避免遗漏有效约束或偏离任务。
 
-## 2. WebCodex implementation conventions
+## 3. 上下文续接
 
-- Follow existing authoritative paths and naming. For cross-layer changes, complete the relevant enums, registries, schemas, adapters, persistence/recovery rules, and projections end to end; do not create a parallel representation for convenience.
-- Treat existing implementation, comments, tests, and compatibility code as evidence, not permanent product requirements. Remove obsolete adapters/configuration/tests together when their concrete consumer is gone, while preserving real wire, authority, durability, and release boundaries.
-- Retain supported published installation/data formats and named external protocol consumers; unreleased main history alone does not justify compatibility. Check the actual stable tag before pruning, and separate migration-only code from current installer/recovery duties. See [`docs/compatibility-policy.md`](docs/compatibility-policy.md).
-- Model-facing directness is exposure/ergonomics, not authority. Generic dispatch may serve an admitted tool only through the same canonical schema, authorization, permission, capability, and effect checks; hidden or unadmitted tools remain unavailable.
-- ToolSpec descriptions must be self-contained about selection, authority, effects, retries, continuation, uncertainty, and recovery. Use the available description budget when semantics require it; arbitrary brevity must not erase safety or recovery meaning.
-- Prefer one unambiguous model-visible next action. If removing a result field leaves the same business interpretation and exact next action, omit the duplicate by default. See [`docs/agent/tool-contract-guidelines.md`](docs/agent/tool-contract-guidelines.md).
-- Prefer host-native artifact import/export or project transfer for binary files. Do not route complete binary payloads through model-generated Base64 merely to cross a tool boundary.
-- New execution/provider integrations must preserve process-tree ownership, credential isolation, cancellation, timeout, durable Job identity, and recovery semantics rather than bypassing ToolRuntime contracts.
-- Before filing a GitHub issue, follow **Reporting issues** in [`CONTRIBUTING.md`](CONTRIBUTING.md): distinguish directly reproduced facts from source-based inference or user reports, include discoverable evidence, and never invent missing environment details or a root cause.
+- 维护精简的任务检查点，记录目标、规则及来源、关键决策、已完成与待办事项、验证证据和未解决问题；长对话、阶段切换及上下文压缩前及时更新。
+- 恢复压缩上下文或继续长对话时，先核对检查点，重新读取适用的 `AGENTS.md` 和已触发技能中的相关要求；摘要不能替代原始规则，缺失或冲突须在继续执行前核实。不得因对话过长、上下文压缩或仅记住最近消息而遗漏有效约束。
 
-## 3. Rust, tests, and validation
+## 4. 交付条件
 
-- Use the `dogfood` Cargo profile for optimized development builds. Reserve `release` for formal release/publication artifacts.
-- Documentation-only changes use `python3 scripts/check_markdown_links.py` and diff review, not Cargo builds. Keep existing English/Chinese peers aligned under [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md).
-- Rust changes normally use the smallest package/focused tests that detect the changed behavior. Full workspace/library runs, `--all-targets`, ignored tests, real-process harnesses, and E2E are for explicit need, release/deployment, cross-cutting boundaries, broad conflict resolution, or a focused-coverage gap.
-- Treat `cargo fmt` as finalization after Rust source stabilizes, not a mutation-by-mutation loop. CI/release formatting remains a final-state gate.
-- Put tests in the existing domain test tree. Keep inline private-helper tests small; process/network/integration fixtures belong in dedicated modules.
-- Process fixtures must mirror production I/O ownership: absent stdin is EOF; explicit stdin is those bytes then EOF; drain/capture stdout and stderr without pipe deadlocks; never accidentally inherit the invoking terminal. Prefer child-local configuration/environment over process-global mutation.
-- For console-only or flaky failures, reproduce with one controlled boundary changed and add a deterministic regression that also fails headlessly. Retries, larger timeouts, and lower concurrency are diagnostic/resource controls, not substitutes for the demonstrated fix.
-- Distinguish current failures, pre-existing failures, expected negative cases, and failures resolved by retry. Never weaken authentication, authorization, validation, schemas, sandboxing, ownership checks, or tests merely to make validation green.
-- Public or persisted contract changes need focused compatibility/privacy/boundedness coverage. Recovery tests should prove identity/effect semantics, not only happy-path output.
+本节是交付前的最后一道强制关卡。必须实际、准确执行以下核验，以当前改动和有效证据作出结论；不得以计划、勾选或完成声明代替核验。
 
-Testing guidance: [`docs/TESTING.md`](docs/TESTING.md).
-
-## 4. Git, deployment, and release authority
-
-- Push, publish, tag, release, deploy, restart services, or otherwise mutate external systems only when the user explicitly authorizes that action and target.
-- Honor existing explicit authorization for the same action and target; do not ask again at each step. Runtime authority mode does not itself authorize repository publication or deployment.
-- Do not force-push, move published tags, overwrite releases, or rewrite published history without explicit authorization naming that operation and target. Failed pre-publication tag recovery is allowed only through the documented guarded reclaim path.
-- A named development/dogfood deployment is not a release. Deploy the reviewed source commit, preserve rollback, record build identity without hiding dirty state, and run focused smoke; this does not authorize version bumps, tags, or publication.
-- Release/publication must obey immutable artifact and signing/provenance contracts. Follow [`docs/agent/release-process.md`](docs/agent/release-process.md) and [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
-
-## 5. Domain sources of truth
-
-Route detailed decisions to the owning document instead of restating those contracts here:
-
-- Public runtime/API surfaces: [`docs/agent/runtime-api-guidelines.md`](docs/agent/runtime-api-guidelines.md)
-- Model-facing tool contracts and friction policy: [`docs/agent/tool-contract-guidelines.md`](docs/agent/tool-contract-guidelines.md)
-- Workflow Sessions and request identity: [`docs/agent/session-model.md`](docs/agent/session-model.md)
-- Manual multi-window collaboration: [`docs/agent/manual-window-collaboration.md`](docs/agent/manual-window-collaboration.md)
-- Durable Agent identity, Conversation, Wake, and asynchronous Agent work: [`docs/architecture/durable-agent-runtime.md`](docs/architecture/durable-agent-runtime.md)
-- Current durable Agent/Conversation/Wake implementation contract: [`docs/architecture/durable-agent-conversation.md`](docs/architecture/durable-agent-conversation.md)
-- Authority boundaries: [`docs/agent/permission-model.md`](docs/agent/permission-model.md)
-- Architecture decisions: [`docs/agent/architecture-decisions.md`](docs/agent/architecture-decisions.md)
-- Release/recovery/deployment: [`docs/agent/release-process.md`](docs/agent/release-process.md) and [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md)
+- 实现后，结合变更文件、实际差异及编译、测试、代码规范检查结果，逐条核验规则清单和每处新增或修改的内容；不得仅检查最近报告的遗漏或编译器指出的差异。
+- 核验必须确认内容正确、完整、与实际行为一致，并有证据证明达到对应规则要求；不得仅凭代码、注释、文档或测试“已经存在”、形式齐全或工具检查通过就判定合规，必须逐条检查规则，最终完成时必须输出全局规则和技能规则里的每条[交付前自检清单]，核对过的打上对号，不涉及的前面注明不涉及。
+- 核心协议、密码学与安全、并发、内存安全、持久化数据、公共接口及大规模跨模块重构必须深入审查。所有语言的变更均须严格遵守并逐条核验对应语言规则和技能要求；编译或测试不能替代规则审计。
+- 检查仅覆盖本次改动及直接影响范围；无明确依赖或风险依据，不得扩展至无关文件、模块或任务，不得无必要地重读或扫描整个仓库。
+- 规则核对与差异扫描以相关规则数和改动量的线性时间复杂度为目标，合并同类检查，避免重复检查和嵌套遍历；编译、测试等必要验证采用足以覆盖影响范围的最小集合。效率不得以省略必要检查或降低正确性与质量为代价。
+- 发现缺口后，修复并复验受影响的规则、改动及直接依赖；未受影响且仍有效的检查结果直接复用，不重复执行。
+- 交付前，确认规则清单及改动清单已逐项标记为 `满足`、`不适用`、`未满足` 或 `未验证`；只有全部相关项闭环且不适用项有明确依据，方可宣告完成。任何适用项未满足或未验证时，不得宣告完成。
+- 最终回复必须与实际差异及命令结果一致，明确必要限制及尚未完成的硬件、部署或平台验证，不得暗示已经成功。

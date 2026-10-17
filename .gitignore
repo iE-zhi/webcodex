@@ -66,3 +66,4 @@ __pycache__/
 /artifacts/mcp-workspaces/
 /artifacts/runtime-call-stream/
 /scripts/ui-smoke/node_modules/
+AGENTS.md
