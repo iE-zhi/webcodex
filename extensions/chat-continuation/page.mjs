@@ -141,7 +141,9 @@ export async function pageAction(action = 'snapshot', input = null) {
         model: '', deliberate: false, thinking_failed: false, rate_limited: false, retry_after: 0 } };
     if (!editor) return base;
     const rows = document.querySelectorAll('[data-testid^="conversation-turn-"],[data-turn-key]');
-    if (!conversation && rows.length === 0) return { ...base, supported: location.pathname === '/' || /^\/g\/[^/]+\/?$/.test(location.pathname) };
+    // 项目首页的首发仍会进入同一 /g/g-p-…/c/…；仅识别明确项目 ID，不放宽到项目设置或其他子页。
+    if (!conversation && rows.length === 0) return { ...base, supported: location.pathname === '/' ||
+      /^\/g\/[A-Za-z0-9_-]+\/?$/.test(location.pathname) || /^\/g\/g-p-[a-f\d]{32}(?:-[A-Za-z0-9_-]+)?\/project\/?$/i.test(location.pathname) };
     const row = rows[rows.length - 1];
     // 当前回合和全局提示会阻止发送；历史回合的已保留错误不阻塞后续任务。
     const alerts = document.querySelectorAll('[data-testid="conversation-turn-error"],main [role="alert"]');

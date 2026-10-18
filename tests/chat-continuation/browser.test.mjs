@@ -15,6 +15,8 @@ const TIMEOUT_MS = 15000;
 const MAX_CDP_BUFFER_CHARS = 8 * 1024 * 1024;
 /** 合成页面使用的固定会话，不包含真实聊天数据。 */
 const CONVERSATION = '11111111-1111-4111-8111-111111111111';
+/** 合成项目首页前缀，保持与同项目未来 /c/ 会话相同的身份，不指向用户真实项目。 */
+const PROJECT_PREFIX = '/g/g-p-' + 'a'.repeat(32);
 /** 生产扩展目录；HTTP 测试服务器只允许显式列出的静态文件。 */
 const ROOT = path.resolve('extensions/chat-continuation');
 /** 可通过 BROWSER_BINARY 选择 CI 的浏览器；默认只检查标准安装位置。 */
@@ -103,9 +105,9 @@ test('Chromium 验证确切 terminal、无草稿发送及 popup 明暗中英文�
     }
     const name = request.url.slice(1);
     // 测试表单明确作为 HTML 返回，不依赖浏览器对无 MIME 片段的内容嗅探。
-    if (request.url === '/' || request.url.startsWith('/c/')) {
+    if (request.url === '/' || [PROJECT_PREFIX + '/project', PROJECT_PREFIX + '-plotjuggler/project'].includes(request.url) || request.url.startsWith('/c/')) {
       response.setHeader('Content-Type', 'text/html; charset=utf-8');
-      response.end(request.url === '/' ? modernFixture : fixture); return;
+      response.end(request.url.startsWith('/c/') ? fixture : modernFixture); return;
     }
     if (!['popup.html', 'popup.css', 'popup.mjs', 'core.mjs'].includes(name)) { response.writeHead(404).end(); return; }
     try {
@@ -135,25 +137,27 @@ test('Chromium 验证确切 terminal、无草稿发送及 popup 明暗中英文�
       return output.result.value;
     };
     await cdp.call('Page.enable', {}, sessionId);
-    // 新版首页没有历史回合，必须允许预置；只有真实 Enter/提交按钮才记录首发意图。
-    await cdp.call('Page.navigate', { url: origin + '/' }, sessionId);
-    await until(() => evaluate('document.querySelector("form[data-chatgpt-composer] [role=textbox]") !== null'));
-    const blank = await evaluate(`(${pageAction})()`);
-    assert.equal(blank.supported, true); assert.equal(blank.userId, null); assert.equal(blank.draft, false);
-    const activitySource = await readFile(path.join(ROOT, 'activity.js'), 'utf8');
-    await evaluate(`window.observedActivity=[];window.chrome={runtime:{id:'isolated-activity',sendMessage:async message=>{observedActivity.push(message)}}};
-      document.querySelector('form').onsubmit=event=>event.preventDefault();` + activitySource);
-    await evaluate(`{const editor=document.querySelector('[role=textbox]');editor.textContent='首发任务';editor.focus();
-      editor.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));}`);
-    assert.equal(await evaluate('observedActivity.filter(message=>message.event==="webcodex_intent").length'), 0);
-    await cdp.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, sessionId);
-    await cdp.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, sessionId);
-    assert.equal(await evaluate('observedActivity.filter(message=>message.event==="webcodex_intent")[0].text'), '首发任务');
-    await evaluate(`document.querySelector('[role=textbox]').textContent='按钮首发';`);
-    const submitPoint = await evaluate(`{const r=document.querySelector('button[type=submit]').getBoundingClientRect();({x:r.x+r.width/2,y:r.y+r.height/2})}`);
-    await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', ...submitPoint, button: 'left', clickCount: 1 }, sessionId);
-    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...submitPoint, button: 'left', clickCount: 1 }, sessionId);
-    assert.equal(await evaluate('observedActivity.filter(message=>message.event==="webcodex_intent").at(-1).text'), '按钮首发');
+    // 普通首页和项目首页都允许预置；只有真实 Enter/提交按钮才记录首发意图。
+    for (const route of ['/', PROJECT_PREFIX + '/project', PROJECT_PREFIX + '-plotjuggler/project']) {
+      await cdp.call('Page.navigate', { url: origin + route }, sessionId);
+      await until(() => evaluate('document.querySelector("form[data-chatgpt-composer] [role=textbox]") !== null'));
+      const blank = await evaluate(`(${pageAction})()`);
+      assert.equal(blank.supported, true); assert.equal(blank.userId, null); assert.equal(blank.draft, false);
+      const activitySource = await readFile(path.join(ROOT, 'activity.js'), 'utf8');
+      await evaluate(`window.observedActivity=[];window.chrome={runtime:{id:'isolated-activity',sendMessage:async message=>{observedActivity.push(message)}}};
+        document.querySelector('form').onsubmit=event=>event.preventDefault();` + activitySource);
+      await evaluate(`{const editor=document.querySelector('[role=textbox]');editor.textContent='首发任务';editor.focus();
+        editor.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));}`);
+      assert.equal(await evaluate('observedActivity.filter(message=>message.event==="webcodex_intent").length'), 0);
+      await cdp.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, sessionId);
+      await cdp.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, sessionId);
+      assert.equal(await evaluate('observedActivity.filter(message=>message.event==="webcodex_intent")[0].text'), '首发任务');
+      await evaluate(`document.querySelector('[role=textbox]').textContent='按钮首发';`);
+      const submitPoint = await evaluate(`{const r=document.querySelector('button[type=submit]').getBoundingClientRect();({x:r.x+r.width/2,y:r.y+r.height/2})}`);
+      await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', ...submitPoint, button: 'left', clickCount: 1 }, sessionId);
+      await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...submitPoint, button: 'left', clickCount: 1 }, sessionId);
+      assert.equal(await evaluate('observedActivity.filter(message=>message.event==="webcodex_intent").at(-1).text'), '按钮首发');
+    }
     await cdp.call('Page.navigate', { url: `${origin}/c/${CONVERSATION}` }, sessionId);
     await until(() => evaluate('document.querySelector("#prompt-textarea") !== null'));
     await evaluate(`window.fixtureMessages = [
@@ -241,12 +245,13 @@ test('Chromium 验证确切 terminal、无草稿发送及 popup 明暗中英文�
     // popup 使用 Chrome API fake；它只记录指令，绝不将按钮操作发送给真实会话。
     await cdp.call('Page.addScriptToEvaluateOnNewDocument', { source: `globalThis.configureFailure=true;globalThis.permissionGranted=true;globalThis.savedConnection=true;globalThis.chrome={
       storage:{local:{get:async()=>({}),set:async()=>{}},session:{get:async()=>({}),set:async value=>{globalThis.connectionDraft=value},remove:async()=>{globalThis.connectionDraft=null}},onChanged:{addListener:()=>{}}},
-      tabs:{query:async()=>[{id:7,url:'https://chatgpt.com/c/${CONVERSATION}'}]},
+      tabs:{query:async()=>[{id:7,url:'https://chatgpt.com${PROJECT_PREFIX}-plotjuggler/project'}]},
       permissions:{request:async()=>globalThis.permissionGranted},
       runtime:{sendMessage:async message=>{(globalThis.commands??=[]).push(message);
         if(message.action==='connection')return {ok:true,url:'http://127.0.0.1:8080',tokenSaved:globalThis.savedConnection};
         if(message.action==='configure'&&globalThis.configureFailure)return {ok:false,error:'continuation_account_required'};
-        return {ok:true,tasks:[],connected:true,url:message.connection?.url||'http://127.0.0.1:8080',tokenSaved:true}}}
+        if(message.action==='start'&&globalThis.startError)return {ok:false,error:globalThis.startError};
+        return {ok:true,tasks:globalThis.popupTasks||[],connected:true,url:message.connection?.url||'http://127.0.0.1:8080',tokenSaved:true}}}
     };` }, sessionId);
     await cdp.call('Page.navigate', { url: `${origin}/popup.html` }, sessionId);
     await until(() => evaluate('document.querySelector("#status")?.textContent.includes("尚未启用")'));
@@ -279,6 +284,7 @@ test('Chromium 验证确切 terminal、无草稿发送及 popup 明暗中英文�
     await evaluate(`document.querySelector('#serverUrl').value='http://127.0.0.1:8080';document.querySelector('#serverUrl').dispatchEvent(new Event('input'));`);
     await evaluate('document.querySelector("#connectionPanel").open=false');
     assert.equal(await evaluate('document.querySelector("#continue").disabled'), false);
+    assert.equal(await evaluate('document.querySelector("#start").disabled'), false, '项目首页且后端已连接时启用按钮必须可点击');
     // 展开的恢复分组遵守相同宽度；finish 允许当前聊天关联 Session，无需用户手填身份。
     await evaluate(`document.querySelector('#recoverySettings').open=true;document.querySelector('#trigger').value='finish';document.querySelector('#trigger').dispatchEvent(new Event('change'));`);
     assert.equal(await evaluate('document.querySelector("#sessionId").required'), false);
@@ -292,11 +298,18 @@ test('Chromium 验证确切 terminal、无草稿发送及 popup 明暗中英文�
         clip: { x: 0, y: 0, width: 400, height: Math.ceil(metrics.cssContentSize.height), scale: 1 } }, sessionId);
       await writeFile(process.env.CONTINUATION_SCREENSHOT.replace(/\.png$/, '-light.png'), Buffer.from(screenshot.data, 'base64'));
     }
+    // 受控 worker 拒绝草稿时，中英文都显示具体原因；错误不关闭连接或清空用户目标。
+    await evaluate(`globalThis.startError='page_draft';document.querySelector('#settings').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));`);
+    await until(() => evaluate('document.querySelector("#error").textContent.includes("未发送")'));
+    assert.equal(await evaluate('document.querySelector("#connectionStatus").dataset.state'), 'connected');
+    await evaluate('document.querySelector("#language").click()');
+    assert.match(await evaluate('document.querySelector("#error").textContent'), /unsent draft/);
+    await evaluate('document.querySelector("#language").click();globalThis.startError=""');
     await evaluate('document.querySelector("#continue").click()');
     await until(() => evaluate('commands.some(message=>message.action === "continue")'));
     await evaluate(`document.querySelector('#objective').value='只修改当前问题';document.querySelector('#mode').value='loop';document.querySelector('#settings').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));`);
-    await until(() => evaluate('commands.some(message=>message.action === "start")'));
-    assert.deepEqual(await evaluate('commands.find(message=>message.action === "start").options'),
+    await until(() => evaluate('commands.some(message=>message.action === "start" && message.options.mode === "loop")'));
+    assert.deepEqual(await evaluate('commands.find(message=>message.action === "start" && message.options.mode === "loop").options'),
       { objective: '只修改当前问题', mode: 'loop', limit: 100, delay: 30, policy: { recovery: true, continuous: true, adaptive_timing: true, runner_id: null, keep_awake: false, silence_seconds: 600, lifetime_hours: 24, trigger: 'after_turn', session_id: null } });
     await evaluate('document.querySelector("#language").click()');
     await until(() => evaluate('document.documentElement.lang === "en"'));
@@ -310,6 +323,27 @@ test('Chromium 验证确切 terminal、无草稿发送及 popup 明暗中英文�
       const screenshot = await cdp.call('Page.captureScreenshot', { format: 'png' }, sessionId);
       await writeFile(process.env.CONTINUATION_SCREENSHOT, Buffer.from(screenshot.data, 'base64'));
     }
+    // 暂时无法读取页面仍保留启用状态；加载与长期读取异常均显示自动复查，暂停原因直接显示在保存项中。
+    await cdp.call('Page.addScriptToEvaluateOnNewDocument', { source: `
+      chrome.tabs.query=async()=>[{id:7,url:'https://chatgpt.com/c/${CONVERSATION}'}];
+      globalThis.popupTasks=[{id:'paused-task',tabId:7,binding:{conversation:'${CONVERSATION}'},state:'paused',reason:'unsupported',objective:''},
+        {id:'waiting-task',tabId:7,binding:{conversation:'${CONVERSATION}'},state:'running',reason:'',rounds:3,
+        limit:100,delay:30,objective:'原任务',mode:'goal',observedAt:Date.now(),pageStatus:'page_loading'}];
+    ` }, sessionId);
+    await cdp.call('Page.navigate', { url: `${origin}/popup.html` }, sessionId);
+    await until(() => evaluate('document.querySelector("#status")?.textContent.includes("恢复后自动续跑")'));
+    assert.equal(await evaluate('document.querySelector("#start").textContent'), '更新当前任务');
+    assert.equal(await evaluate('document.querySelector("#pause").disabled'), false);
+    assert.equal(await evaluate('document.querySelector("#tasks").value'), 'waiting-task', '历史暂停项不能遮住当前运行项');
+    assert.match(await evaluate('document.querySelector("#tasks").textContent'), /页面结构无法确认/);
+    await evaluate('document.querySelector("#language").click()');
+    assert.match(await evaluate('document.querySelector("#status").textContent'), /resumes automatically/);
+    await evaluate('popupTasks.find(task=>task.id==="waiting-task").pageStatus="page_unreadable";document.querySelector("#language").click()');
+    // locale 切换只渲染现有投影；显式验证连接触发一次新的只读列表，载入异常诊断。
+    await evaluate('configureFailure=false;document.querySelector("#connectionForm").requestSubmit()');
+    await until(() => evaluate('document.querySelector("#status").textContent.includes("自动重试中")'));
+    await evaluate('document.querySelector("#language").click()');
+    assert.match(await evaluate('document.querySelector("#status").textContent'), /retrying automatically/);
     // 加载生产扩展并打开真实 action popup，不用普通网页的固定视口替代尺寸验收。
     const { id } = await cdp.call('Extensions.loadUnpacked', { path: ROOT });
     const worker = await until(async () => (await cdp.call('Target.getTargets')).targetInfos.find(info => info.type === 'service_worker' && info.url === `chrome-extension://${id}/worker.mjs`));

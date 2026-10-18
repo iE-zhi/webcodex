@@ -65,16 +65,17 @@ async function harness(configured = true, origin = 'http://127.0.0.1:8080') {
   return app;
 }
 
-// 预置必须来自明确 popup 操作及同文档首发；取消晚于 Server 提交时暂停该任务，不产生自动发送。
+// 普通首页与项目首页的预置均需明确 popup 操作和同文档首发；取消晚于 Server 提交时暂停，不自动发送。
 test('新聊天预置在真实首发后创建，取消阻止晚到启用和重复发送', async () => {
-  for (const cancel of [false, true]) {
+  for (const prefix of ['', '/g/g-p-' + 'a'.repeat(32)]) for (const cancel of [false, true]) {
     const app = await harness();
-    app.page = { url: 'https://chatgpt.com/', supported: true, busy: false, draft: false, blocked: false, userId: null, userText: '', reply: null };
+    app.page = { url: 'https://chatgpt.com' + prefix + (prefix ? '/project' : '/'), supported: true, busy: false, draft: true, blocked: false, userId: null, userText: '', reply: null };
     assert.equal((await app.command('start', { options: { objective: '预置目标', mode: 'goal', limit: 10, delay: 30 } })).ok, true);
     assert.equal(app.task, null);
     const pageMessage = message => new Promise(resolve => app.events.message(message, { id: 'test', tab: { id: 7 }, frameId: 0, documentId: 'doc-1', url: app.page.url }, resolve));
     assert.equal((await pageMessage({ event: 'webcodex_intent', text: '第一条请求' })).ok, true);
-    app.page = { ...app.page, url: `https://chatgpt.com/c/${CONVERSATION}`, userId: 'u1', userText: '第一条请求', userCount: 1, busy: true };
+    const actualPrefix = prefix ? prefix + '-plotjuggler' : '';
+    app.page = { ...app.page, url: `https://chatgpt.com${actualPrefix}/c/${CONVERSATION}`, userId: 'u1', userText: '第一条请求', userCount: 1, busy: true, draft: false };
     const original = globalThis.fetch;
     let release, reached;
     const held = new Promise(resolve => { release = resolve; }), arrived = new Promise(resolve => { reached = resolve; });
@@ -88,6 +89,7 @@ test('新聊天预置在真实首发后创建，取消阻止晚到启用和重�
     release(); await tick;
     assert.equal(app.requests.filter(request => request.action === 'start').length, 1);
     assert.equal(app.task.state, cancel ? 'paused' : 'running');
+    assert.equal(app.task.binding.prefix, actualPrefix);
     assert.equal(app.sends.length, 0);
     if (!cancel) assert.equal((await app.command('list')).prearm, null);
   }
@@ -97,6 +99,26 @@ test('无后端连接时禁止发送，不能降级到扩展自主续跑', async
   const app = await harness(false);
   assert.equal((await app.command('continue')).error, 'connection_required');
   assert.equal(app.sends.length, 0); assert.equal(app.requests.length, 0);
+});
+
+// 已有会话的未发送草稿只报告明确原因；不得创建 Server 任务、清理文本或点击发送。
+test('已有会话存在草稿时启用和Continue均明确拒绝，不创建任务或自动发送', async () => {
+  for (const action of ['start', 'continue']) {
+    const app = await harness(); app.page.draft = true;
+    const result = await app.command(action, { options: { objective: '', mode: 'goal', limit: 10, delay: 30 } });
+    assert.equal(result.error, 'page_draft');
+    assert.equal(app.requests.some(request => request.action === 'start'), false);
+    assert.equal(app.task, null); assert.equal(app.page.draft, true); assert.equal(app.sends.length, 0);
+  }
+});
+
+// 页面模型未知不能先创建任务再交给 Server 返回笼统冲突，必须保留明确的页面失败状态。
+test('已有会话页面不支持时启用明确拒绝，不创建任务', async () => {
+  const app = await harness(); app.page.supported = false;
+  const result = await app.command('start', { options: { objective: '', mode: 'goal', limit: 10, delay: 30 } });
+  assert.equal(result.error, 'unsupported');
+  assert.equal(app.requests.some(request => request.action === 'start'), false);
+  assert.equal(app.task, null); assert.equal(app.sends.length, 0);
 });
 
 test('仅发送 Server 一次性领取正文，重复观测不重放 dispatching 消息', async () => {

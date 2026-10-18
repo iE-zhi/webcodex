@@ -1,7 +1,7 @@
 /** 隔离页面观察器：只唤醒扩展读取公开状态，并转发真实 Stop；不持有 PAT、任务或发送权。 */
 (() => {
   /** 同一隔离文档只允许一个观察器；扩展更新先释放旧监听，重复注入不增加心跳。 */
-  const KEY = '__webcodexContinuationObserver', VERSION = '5';
+  const KEY = '__webcodexContinuationObserver', VERSION = '7';
   if (globalThis[KEY]?.version === VERSION) return;
   globalThis[KEY]?.dispose?.();
   /** 每文档最多每秒一个活动通知，十五秒一个心跳；后台标签仍受 Chrome 调度限制。 */
@@ -40,9 +40,10 @@
     return visible.length === 1 ? visible[0] : null;
   }
 
-  /** 只在空白聊天真实点击发送或按 Enter 时记录首发意图；正文只用于 worker 比较摘要。 */
+  /** 只在空白聊天或明确项目首页的真实发送操作中记录首发意图；正文只用于 worker 比较摘要。 */
   function firstSend(event) {
-    if (closed || !event.isTrusted || !/^(?:\/g\/[A-Za-z0-9_-]+)?\/?$/.test(location.pathname)) return;
+    if (closed || !event.isTrusted) return;
+    if (!/^(?:\/g\/[A-Za-z0-9_-]+)?\/?$/.test(location.pathname) && !/^\/g\/g-p-[a-f\d]{32}(?:-[A-Za-z0-9_-]+)?\/project\/?$/i.test(location.pathname)) return;
     const editor = composer();
     const text = editor?.innerText ?? editor?.value;
     if (typeof text !== 'string' || new TextEncoder().encode(text).length > MAX_INTENT_BYTES) return;

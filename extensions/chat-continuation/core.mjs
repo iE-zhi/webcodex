@@ -34,12 +34,24 @@ export function chatLocation(value) {
   }
 }
 
-/** 只接受尚无会话 ID 的新聊天入口；不把搜索、设置或历史会话当成可预置页面。 */
+/** 比较同一已校验 origin 下的聊天范围；仅固定项目 ID 相同才允许名称后缀变化，普通/GPT 路径仍须完全一致。 */
+export function sameChatScope(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  if (left === right) return true;
+  // 项目身份只取 g-p- 后的三十二位十六进制 ID；后缀限于单个路径组件，不接受嵌套路径。
+  const project = /^\/g\/g-p-([a-f\d]{32})(?:-[A-Za-z0-9_-]+)?$/i;
+  // 两侧都必须能提取固定 ID，不能把普通 GPT 或缺失范围归入项目别名。
+  const first = left.match(project), second = right.match(project);
+  return Boolean(first && second && first[1].toLowerCase() === second[1].toLowerCase());
+}
+
+/** 接受普通/GPT 新聊天和明确的项目首页；项目首页统一返回不含 /project 的绑定前缀，其他页面拒绝预置。 */
 export function newChatLocation(value) {
   try {
     const url = new URL(value);
     if (!['https://chatgpt.com', 'https://chat.openai.com'].includes(url.origin) || url.username || url.password || url.search || url.hash) return null;
-    const match = url.pathname.match(/^(\/g\/[A-Za-z0-9_-]+)?\/?$/);
+    const match = url.pathname.match(/^(\/g\/[A-Za-z0-9_-]+)?\/?$/)
+      || url.pathname.match(/^(\/g\/g-p-[a-f\d]{32}(?:-[A-Za-z0-9_-]+)?)\/project\/?$/i);
     return match ? { origin: url.origin, prefix: match[1] || '', conversation: null } : null;
   } catch { return null; /* 不完整地址没有预置授权。 */ }
 }

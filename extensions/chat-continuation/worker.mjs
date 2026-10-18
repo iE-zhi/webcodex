@@ -1,5 +1,5 @@
 /** 浏览器适配器：只上报公开回合和投递 Server 已决消息，不保存任务决策或执行本地续跑。 */
-import { chatLocation, newChatLocation, serverOrigin } from './core.mjs';
+import { chatLocation, newChatLocation, sameChatScope, serverOrigin } from './core.mjs';
 import { pageAction } from './page.mjs';
 import { draftKey, readDraft, writeDraft } from './drafts.mjs';
 import { arm, disarm, listPrearms, intent, candidate, consume, prearmFailure } from './prearm.mjs';
@@ -30,6 +30,30 @@ let watchedTabs = new Set(), prearmedTabs = new Set(), inventoryAt = 0;
 const MAX_PREARM_TARGETS = 16;
 /** 最近六十四个已注入主文档；只减少重复注入开销，不缓存公开状态或发送权。 */
 const observerDocuments = new Map(), MAX_OBSERVER_DOCUMENTS = 64;
+/** 最多三十二个活动任务的页面读取诊断；只供面板显示，不保存任务状态或发送权。 */
+const pageWaits = new Map(), MAX_PAGE_WAITS = 32;
+/** 距最后一次有效页面观察超过九十秒后显示读取异常，不能无限显示正在加载。 */
+const PAGE_LOADING_MS = 90000;
+
+/** 记录有界的读取等待诊断；任务状态和授权截止时间仍由 Server 保持。 */
+function waitForPage(task) {
+  pageWaits.set(task.id, Date.now() - (task.observed_at || 0) > PAGE_LOADING_MS ? 'page_unreadable' : 'page_loading');
+  if (pageWaits.size > MAX_PAGE_WAITS) pageWaits.delete(pageWaits.keys().next().value);
+}
+
+/** 页面模型未就绪时保留服务端授权并等待后续观察；完整正文超限仍须明确暂停。 */
+async function pageReady(settings, task, snapshot) {
+  if (snapshot.page.supported) { pageWaits.delete(task.id); return true; }
+  if (snapshot.page.unsupportedReason === 'page_limit') {
+    pageWaits.delete(task.id);
+    await pause(settings, task, 'page_limit');
+  } else {
+    // 刷新后的 DOM/React 挂载没有固定时长；不观察残缺回合、不发送、不再次刷新。
+    // 三十秒 alarm 和页面活动会自动复查，服务端原任务期限继续生效。
+    waitForPage(task);
+  }
+  return false;
+}
 
 /** 记录一个有界预置唤醒目标；真正授权仍在会话存储和 Server 中重新检查。 */
 function rememberPrearm(tab) {
@@ -66,6 +90,8 @@ async function installObservers() {
 /** 用刚读到的 Server 列表更新活动观察目标，所有真正动作仍重新查询服务端。 */
 function rememberTargets(tasks) {
   watchedTabs = new Set(tasks.filter(task => !['paused', 'done'].includes(task.state)).map(task => task.binding.tab_id));
+  const active = new Set(tasks.filter(task => !['paused', 'done'].includes(task.state)).map(task => task.id));
+  for (const id of pageWaits.keys()) if (!active.has(id)) pageWaits.delete(id);
   inventoryAt = Date.now();
 }
 /** 当前安装内任务的取消版本；只保存最近 64 个 ID，阻止晚到准备或授权再次点击。 */
@@ -158,9 +184,22 @@ async function inspect(tabId, action = 'snapshot', timeout = INSPECT_TIMEOUT_MS)
   return { page: { ...results[0].result, documentId: results[0].documentId }, documentId: results[0].documentId };
 }
 
-/** 转换公开观察字段；不包含工具参数、工具结果、私有推理或扩展凭据。 */
-function observation(page) {
-  return { url: page.url, supported: page.supported, busy: page.busy, draft: page.draft, blocked: page.blocked,
+/** 只把相同 origin、会话 UUID 和固定项目 ID 视为同一会话；普通 GPT 路径仍须完全相同。 */
+function matchesConversation(url, binding) {
+  const route = chatLocation(url);
+  return Boolean(route && route.conversation === binding.conversation && route.origin === binding.origin && sameChatScope(route.prefix, binding.prefix));
+}
+
+/** 转换公开观察字段；binding 可将同一项目的名称别名映射到服务端原绑定路径，其他身份变化一律拒绝。
+ * 发送脚本仍用原始 page.url 和确切 documentId 核对，不用映射后的地址执行网页动作。 */
+function observation(page, binding = null) {
+  let url = page.url;
+  if (binding) {
+    if (!matchesConversation(url, binding)) throw new Error('page_changed');
+    // Server 的持久化绑定不因项目名称变化而迁移；只转换已证实同一项目、同一会话的显示路径。
+    if (chatLocation(url).prefix !== binding.prefix) url = `${binding.origin}${binding.prefix}/c/${binding.conversation}`;
+  }
+  return { url, supported: page.supported, busy: page.busy, draft: page.draft, blocked: page.blocked,
     document_id: page.documentId || '', interrupted: page.interrupted === true, tools_busy: page.toolsBusy === true, approval: page.approval === true, finish_id: null,
     activity: page.activity || {},
     source_proof: page.sourceProof || null,
@@ -178,6 +217,7 @@ function selector(task) {
 function view(task) {
   return { ...task.options, id: task.id, generation: task.generation, binding: task.binding, tabId: task.binding.tab_id,
     state: task.state, reason: task.reason, rounds: task.rounds, observedAt: task.observed_at || 0, localAt: task.local_at || 0, localStatus: task.local_status || 'ready',
+    pageStatus: pageWaits.get(task.id) || '',
     sendAuthorized: task.send_authorized, nativeHeld: task.native_held, queue: task.queue || [], pending: task.delivery_id ? { id: task.delivery_id } : null };
 }
 
@@ -186,15 +226,21 @@ async function pause(settings, task, reason) {
   return api(settings, { action: 'pause', ...selector(task), reason });
 }
 
-/** 查找确切会话；重开前领取持久化预算，新标签不会抢占用户当前页面。 */
+/** 查找确切会话；项目名称别名不改变身份，导航暂停须由当前标签地址确认，重开仍须领取预算。 */
 async function locate(settings, task, browser) {
   let snapshot;
   try { snapshot = await inspect(task.binding.tab_id); } catch { /* 原标签关闭，继续查找同一会话。 */ }
-  const matches = page => {
-    const route = chatLocation(page.url);
-    return route && route.conversation === task.binding.conversation && route.origin === task.binding.origin && route.prefix === task.binding.prefix;
-  };
+  /** page 为只读快照或标签地址；身份按固定项目和会话判断，不按项目显示名称判断。 */
+  const matches = page => matchesConversation(page.url, task.binding);
   if (snapshot && !matches(snapshot.page) && task.binding.browser === browser) {
+    let tab;
+    try { tab = await chrome.tabs.get(task.binding.tab_id); }
+    catch { console.warn('Continuation navigation could not be confirmed; observation deferred.'); return null; }
+    // 加载中的临时文档和晚到快照不能证明用户换了会话；等待下一次完整读取，不重建任务。
+    const url = tab.pendingUrl || tab.url;
+    if (tab.status !== 'complete' || !url || tab.pendingUrl && tab.pendingUrl !== tab.url || matches({ url }) || url !== snapshot.page.url) {
+      waitForPage(task); return null;
+    }
     await pause(settings, task, 'navigation'); return null;
   }
   if (!snapshot || !matches(snapshot.page) || task.binding.browser !== browser) {
@@ -207,16 +253,20 @@ async function locate(settings, task, browser) {
       if (permit.repair === 'open') await chrome.tabs.create({ url, active: false });
       return null;
     }
+    // 恢复后的唯一标签尚在加载时不再次注入或刷新；新浏览器身份也不能把正常加载计入修复次数。
+    if (exact[0].status === 'loading' || exact[0].pendingUrl && exact[0].pendingUrl !== exact[0].url) {
+      waitForPage(task); return null;
+    }
     try { snapshot = await inspect(exact[0].id); }
     catch {
       const permit = await api(settings, { action: 'repair', ...selector(task), kind: 'wake', page: null });
       if (permit.repair === 'wake') await chrome.tabs.reload(exact[0].id);
       return null;
     }
-    if (!snapshot.page.supported) { await pause(settings, task, snapshot.page.unsupportedReason || 'unsupported'); return null; }
     if (!matches(snapshot.page)) return null;
+    if (!await pageReady(settings, task, snapshot)) return null;
     const replacement = { ...task.binding, browser, tab_id: exact[0].id };
-    const rebound = await api(settings, { action: 'rebind', ...selector(task), replacement, page: observation(snapshot.page) });
+    const rebound = await api(settings, { action: 'rebind', ...selector(task), replacement, page: observation(snapshot.page, task.binding) });
     task = rebound.tasks[0];
   }
   return { task, snapshot };
@@ -230,7 +280,7 @@ async function receipt(settings, task) {
   for (let attempt = 0; attempt < ATTEMPTS && Date.now() < deadline; attempt++) {
     const snapshot = await inspect(task.binding.tab_id, 'snapshot', deadline - Date.now());
     if (Date.now() >= deadline) return;
-    const result = await api(settings, { action: 'observe', ...selector(task), page: observation(snapshot.page) }, deadline - Date.now());
+    const result = await api(settings, { action: 'observe', ...selector(task), page: observation(snapshot.page, task.binding) }, deadline - Date.now());
     if (!['dispatching', 'uncertain'].includes(result.tasks[0]?.state)) return;
     await new Promise(resolve => setTimeout(resolve, Math.min(DELAY_MS, Math.max(0, deadline - Date.now()))));
   }
@@ -247,30 +297,30 @@ async function processTask(settings, original, epoch) {
   if (!located) return;
   let { task, snapshot } = located;
   await enableObserver(task.binding.tab_id, snapshot.documentId);
-  const stop = stoppedTabs.get(task.binding.tab_id), stoppedRoute = chatLocation(stop?.url);
-  if (stop?.document === snapshot.documentId && stoppedRoute?.conversation === task.binding.conversation && stoppedRoute.origin === task.binding.origin && stoppedRoute.prefix === task.binding.prefix) { await pause(settings, task, 'user_stopped'); return; }
-  if (!snapshot.page.supported) { await pause(settings, task, snapshot.page.unsupportedReason || 'unsupported'); return; }
-  const observed = await api(settings, { action: 'observe', ...selector(task), page: observation(snapshot.page) });
+  const stop = stoppedTabs.get(task.binding.tab_id);
+  if (stop?.document === snapshot.documentId && matchesConversation(stop.url, task.binding)) { await pause(settings, task, 'user_stopped'); return; }
+  if (!await pageReady(settings, task, snapshot)) return;
+  const observed = await api(settings, { action: 'observe', ...selector(task), page: observation(snapshot.page, task.binding) });
   const current = observed.tasks[0];
   if (!current || !currentControl()) return;
   if (current.state === 'running' && current.repair_at && current.repair_at <= Date.now() && !snapshot.page.reply?.terminal) {
-    const permit = await api(settings, { action: 'repair', ...selector(current), kind: 'reload', page: observation(snapshot.page) });
+    const permit = await api(settings, { action: 'repair', ...selector(current), kind: 'reload', page: observation(snapshot.page, current.binding) });
     if (permit.repair === 'reload') await chrome.tabs.reload(current.binding.tab_id);
     return;
   }
   if (current.state !== 'ready' || current.next_at > Date.now()) return;
   snapshot = await inspect(current.binding.tab_id);
-  const claimed = await api(settings, { action: 'prepare', ...selector(current), delivery_id: current.delivery_id, page: observation(snapshot.page) });
+  const claimed = await api(settings, { action: 'prepare', ...selector(current), delivery_id: current.delivery_id, page: observation(snapshot.page, current.binding) });
   if (!claimed.dispatch || !currentControl()) return;
   snapshot = await inspect(current.binding.tab_id);
   if (!currentControl()) return;
-  const authorized = await api(settings, { action: 'authorize', ...selector(claimed.tasks[0]), delivery_id: claimed.dispatch.id, page: observation(snapshot.page) });
+  const authorized = await api(settings, { action: 'authorize', ...selector(claimed.tasks[0]), delivery_id: claimed.dispatch.id, page: observation(snapshot.page, claimed.tasks[0].binding) });
   if (authorized.tasks[0]?.state !== 'dispatching' || !authorized.tasks[0]?.send_authorized) return;
   task = authorized.tasks[0];
   if (!currentControl()) {
     // 本流程尚未进入发送脚本，能够明确报告未点击；响应丢失或脚本异常不能走此证明。
     const cleared = await inspect(task.binding.tab_id);
-    await api(settings, { action: 'not_sent', ...selector(task), delivery_id: claimed.dispatch.id, page: observation(cleared.page) });
+    await api(settings, { action: 'not_sent', ...selector(task), delivery_id: claimed.dispatch.id, page: observation(cleared.page, task.binding) });
     return;
   }
   try {
@@ -281,7 +331,7 @@ async function processTask(settings, original, epoch) {
     if (result.length !== 1 || result[0].result?.sent !== true) {
       if (result.length === 1 && result[0].result?.definite === true && result[0].result?.cleared === true) {
         const cleared = await inspect(task.binding.tab_id);
-        await api(settings, { action: 'not_sent', ...selector(task), delivery_id: claimed.dispatch.id, page: observation(cleared.page) });
+        await api(settings, { action: 'not_sent', ...selector(task), delivery_id: claimed.dispatch.id, page: observation(cleared.page, task.binding) });
       } else await pause(settings, task, 'send_failed');
       return;
     }
@@ -349,7 +399,7 @@ async function pageActivity(message, sender) {
     const { tasks } = await api(settings, { action: 'list', client });
     const route = chatLocation(sender.url);
     if (!route) return;
-    for (const task of tasks.filter(task => task.binding.tab_id === tab && task.binding.conversation === route.conversation && task.binding.origin === route.origin && task.binding.prefix === route.prefix && !['paused', 'done'].includes(task.state))) {
+    for (const task of tasks.filter(task => task.binding.tab_id === tab && matchesConversation(sender.url, task.binding) && !['paused', 'done'].includes(task.state))) {
       cancelLocal(task.id); await cancelPage(task); await pause(settings, task, 'user_stopped');
     }
     return;
@@ -396,6 +446,7 @@ async function command(message) {
       for (const entry of await listPrearms()) await disarm(entry.tab);
     }
     connectionEpoch++;
+    pageWaits.clear();
     await chrome.storage.local.set({ [CONNECTION]: settings });
     rememberTargets(listed.tasks);
     return { tasks: listed.tasks.map(view), connected: true, url: settings.url, tokenSaved: true };
@@ -431,7 +482,7 @@ async function command(message) {
     const task = listed.tasks.find(task => task.id === message.taskId);
     if (!task) throw new Error('missing');
     const snapshot = await inspect(task.binding.tab_id);
-    await api(settings, { action: 'update', ...selector(task), options: message.options, page: observation(snapshot.page) });
+    await api(settings, { action: 'update', ...selector(task), options: message.options, page: observation(snapshot.page, task.binding) });
     return {};
   }
   if (!['start', 'continue'].includes(message.action)) throw new Error('action');
@@ -444,10 +495,16 @@ async function command(message) {
     await enableObserver(message.tabId, snapshot.documentId);
     await arm(message.tabId, snapshot.documentId, snapshot.page.url, options, settings, ids); rememberPrearm(message.tabId); return {};
   }
-  const task = listed.tasks.find(task => task.binding.conversation === location.conversation && task.binding.origin === location.origin && task.binding.prefix === location.prefix);
-  const binding = { ...ids, ...location, tab_id: message.tabId };
+  // 已有聊天启用前先解释确定的本地阻挡；不清除草稿，也不把启用拒绝伪装成任务版本冲突。
+  // 新聊天预置在上方单独处理，允许用户保留尚未首次发送的输入。
+  if (snapshot.page.draft) throw new Error('page_draft');
+  if (!snapshot.page.supported) throw new Error(snapshot.page.unsupportedReason === 'page_limit' ? 'page_limit' : 'unsupported');
+  const matching = listed.tasks.filter(task => matchesConversation(snapshot.page.url, task.binding));
+  // 同一会话可能保留旧的暂停记录；正在运行的唯一任务优先，不能误建第二个任务。
+  const task = matching.find(task => !['paused', 'done'].includes(task.state)) || matching[0];
+  const binding = { ...ids, ...location, prefix: task?.binding.prefix ?? location.prefix, tab_id: message.tabId };
   const started = await api(settings, { action: 'start', request_id: crypto.randomUUID(), task_id: task?.id || null,
-    generation: task?.generation ?? null, binding, options, page: observation(snapshot.page) });
+    generation: task?.generation ?? null, binding, options, page: observation(snapshot.page, binding) });
   if (started.tasks[0]) { watchedTabs.add(message.tabId); await processTask(settings, started.tasks[0], connectionEpoch); }
   return {};
 }

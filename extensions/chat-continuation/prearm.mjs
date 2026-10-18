@@ -1,5 +1,5 @@
 /** 新聊天的显式预置授权；只在同文档真实首次发送后创建 Server 任务，不跟随历史会话导航。 */
-import { newChatLocation, chatLocation } from './core.mjs';
+import { newChatLocation, chatLocation, sameChatScope } from './core.mjs';
 
 /** 预置只在当前浏览器会话存活，最多二十四小时；每安装最多十六个预置标签。 */
 const KEY = 'continuation.prearms.v1', MAX_PREARMS = 16, ARM_MS = 86400000;
@@ -56,17 +56,17 @@ export async function intent(tab, documentId, url, text) {
   const fingerprint = await hash(text);
   return transaction(entries => {
     const entry = entries[tab];
-    if (entry && entry.documentId === documentId && entry.origin === route.origin && entry.prefix === route.prefix) {
+    if (entry && entry.documentId === documentId && entry.origin === route.origin && sameChatScope(entry.prefix, route.prefix)) {
       entry.intent = { fingerprint, at: Date.now() };
     }
   });
 }
 
-/** 验证新会话是同文档、同入口、同账户配置且首条人工正文一致；不接管已有历史聊天。 */
+/** 验证同文档、固定项目身份、账户配置及首条人工正文；允许项目名称后缀变化，返回实际会话前缀供 Server 精确绑定。 */
 export async function candidate(entry, snapshot, settings, ids) {
   const route = chatLocation(snapshot.page.url);
   if (!entry.intent || !route || entry.expiresAt <= Date.now() || Date.now() - entry.intent.at > INTENT_MS
-      || entry.documentId !== snapshot.documentId || entry.origin !== route.origin || entry.prefix !== route.prefix
+      || entry.documentId !== snapshot.documentId || entry.origin !== route.origin || !sameChatScope(entry.prefix, route.prefix)
       || entry.server !== settings.url || entry.client !== ids.client || entry.browser !== ids.browser
       || !snapshot.page.supported || !snapshot.page.userId || snapshot.page.userCount !== 1
       || await hash(settings.token) !== entry.credential || await hash(snapshot.page.userText) !== entry.intent.fingerprint) return null;

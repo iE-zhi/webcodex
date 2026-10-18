@@ -17,6 +17,8 @@ const COPY = {
     queueText: '排队内容', queueAdd: '加入队列', queuePlan: '当前 ChatGPT 规划', queueEntries: '等待投递', queued_input: '等待投递排队输入', plan_invalid: '规划格式无效，已暂停，请检查当前回复',
     continuous: '保持本会话启用', update: '更新当前任务', watching: '本轮结束，等待新请求', prepared: '准备发送，尚未授权',
     user_stopped: '你已停止生成，自动续跑已暂停', page_limit: '公开消息无法完整读取，请检查会话', no_progress: '连续三轮答案相同，已暂停',
+    page_loading: '等待页面加载，恢复后自动续跑',
+    page_unreadable: '页面暂时无法读取，自动重试中',
     rate_limited: '等待 ChatGPT 额度或访问限制解除', observer_stale: '页面观察已超时，请检查浏览器', turn_complete: '本轮已结束',
     not_sent_retry: '已确认未发送，等待重试', prepare_expired: '准备已过期，等待重新核对', observer_unavailable: '页面观察器不可用',
     recoverySettings: '恢复与触发', recovery: '自动恢复中断', silenceSeconds: '基础静默等待（秒）', lifetimeHours: '有效期（小时）',
@@ -45,6 +47,7 @@ const COPY = {
     running: '运行中', paused: '已暂停', done: '已停止',
     user: '手动暂停', expired: '有效期已到', navigation: '会话已切换', unsupported: '页面结构无法确认，请刷新页面或更新扩展',
     delivery_unknown: '发送结果不确定，请核对会话后重新启用', user_changed: '收到新消息，请核对目标后重新启用',
+    page_draft: '聊天输入框有未发送内容，请先发送后再启用续跑。',
     page_blocked: '页面提示错误或需要操作', chat_blocked: '当前会话需要人工处理',
     round_limit: '已到轮数上限', send_failed: '发送未完成，请检查草稿', unavailable: '原标签页不可用',
     browser_restart: '浏览器已重启，请检查后重新启用',
@@ -64,6 +67,8 @@ const COPY = {
     queueText: 'Queued content', queueAdd: 'Add to queue', queuePlan: 'Plan in current ChatGPT', queueEntries: 'Pending delivery', queued_input: 'Queued input ready', plan_invalid: 'Invalid plan format; paused, review the reply',
     continuous: 'Keep enabled for this chat', update: 'Update current task', watching: 'Turn ended; awaiting your next request', prepared: 'Prepared; not authorized',
     user_stopped: 'You stopped generation; automation paused', page_limit: 'Cannot read the full public message; review the chat', no_progress: 'Same answer for three rounds; paused',
+    page_loading: 'Waiting for the page; continuation resumes automatically',
+    page_unreadable: 'Page unreadable; retrying automatically',
     rate_limited: 'Waiting for ChatGPT access or usage limits', observer_stale: 'Page observation timed out; check the browser', turn_complete: 'Turn completed',
     not_sent_retry: 'Confirmed not sent; awaiting retry', prepare_expired: 'Preparation expired; checking again', observer_unavailable: 'Page observer unavailable',
     recoverySettings: 'Recovery and triggers', recovery: 'Recover interrupted work', silenceSeconds: 'Base silence wait (seconds)', lifetimeHours: 'Lifetime (hours)',
@@ -92,6 +97,7 @@ const COPY = {
     running: 'Running', paused: 'Paused', done: 'Stopped',
     user: 'Paused by you', expired: 'Run expired', navigation: 'Conversation changed', unsupported: 'Page structure not recognized; reload the page or update the extension',
     delivery_unknown: 'Delivery uncertain; check the chat before enabling again', user_changed: 'New message; review the objective before enabling again',
+    page_draft: 'The chat composer has an unsent draft. Send it before enabling continuation.',
     page_blocked: 'Page error or action required', chat_blocked: 'The chat needs your input',
     round_limit: 'Round limit reached', send_failed: 'Send not completed; check the draft', unavailable: 'Original tab unavailable',
     browser_restart: 'Browser restarted; review before enabling again',
@@ -175,6 +181,7 @@ function render() {
   element('status').textContent = current ? `${label(current.state)} · ${current.rounds}/${current.limit}${current.reason ? ` · ${label(current.reason)}` : ''}` : label(prearm ? prearm.error || 'prearmed' : tabId === null ? 'idle' : 'inactive');
   const active = prearm || current && !['paused', 'done'].includes(current.state);
   if (current?.nativeHeld && current.state === 'running') element('status').textContent = `${label('native_running')} · ${current.rounds}/${current.limit}`;
+  if (active && current?.pageStatus) element('status').textContent += ` · ${label(current.pageStatus)}`;
   /** 页面超过三次正常观察周期没有有效回报时，显示观察异常而不是继续声称健康运行。 */
   const STALE_MS = 90000;
   if (active && current?.observedAt && Date.now() - current.observedAt > STALE_MS) element('status').textContent += ` · ${label('observer_stale')}`;
@@ -200,7 +207,7 @@ function render() {
     // task 文本来自用户目标，仅作为纯文本选项，不能执行网页标记。
     const option = document.createElement('option');
     option.value = task.id;
-    option.textContent = `${label(task.state)} · ${task.objective.slice(0, 35)}`;
+    option.textContent = `${label(task.state)} · ${task.objective.slice(0, 35)}${task.reason ? ` · ${label(task.reason)}` : ''}`;
     option.selected = task.id === current?.id;
     return option;
   }) : [new Option(label('empty'), '')]));
@@ -212,7 +219,9 @@ function applyTasks(result, fill = false) {
   connected = result.connected === true;
   connectionState = connected ? 'connected' : 'unconfigured';
   connectionError = '';
-  current = tasks.find(task => task.tabId === tabId && task.binding.conversation === conversation) || null;
+  const matching = tasks.filter(task => task.tabId === tabId && task.binding.conversation === conversation);
+  // 历史暂停记录不能遮住本标签仍在运行的任务。
+  current = matching.find(task => !['paused', 'done'].includes(task.state)) || matching[0] || null;
   prearm = current ? null : result.prearm || null;
   const source = current || prearm?.options;
   if (fill && source) {

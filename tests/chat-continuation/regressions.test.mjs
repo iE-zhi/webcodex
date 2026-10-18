@@ -7,11 +7,11 @@ import { serverFixture } from './server-fixture.mjs';
 /** 模块导入序号使每个场景获得自己的运行期取消版本及身份缓存。 */
 let sequence = 0;
 
-/** 运行一个合成浏览器；options 控制重复标签、页面失效和响应交付屏障，server 为测试独占真实实例。 */
-async function browser(server, { duplicate = false, unsupported = false, uninjectable = false, hold = '' } = {}) {
+/** 运行一个合成浏览器；options 控制项目路径、重复标签、页面失效和响应交付屏障，server 为测试独占真实实例。 */
+async function browser(server, { duplicate = false, unsupported = false, uninjectable = false, hold = '', prefix = '' } = {}) {
   const client = randomUUID(), process = randomUUID(), events = {}, requests = [], sends = [], reloads = [];
-  const binding = { client, browser: duplicate ? randomUUID() : process, conversation: randomUUID(), origin: 'https://chatgpt.com', prefix: '', tab_id: 7 };
-  const page = { url: `https://chatgpt.com/c/${binding.conversation}`, supported: !unsupported, userId: 'u1', userText: '原始人工请求', busy: false,
+  const binding = { client, browser: duplicate ? randomUUID() : process, conversation: randomUUID(), origin: 'https://chatgpt.com', prefix, tab_id: 7 };
+  const page = { url: `https://chatgpt.com${prefix}/c/${binding.conversation}`, supported: !unsupported, userId: 'u1', userText: '原始人工请求', busy: false,
     draft: false, blocked: false, reply: { id: 'a1', userId: 'u1', text: '尚未完成', terminal: true } };
   let release, arrived;
   const blocked = new Promise(resolve => { release = resolve; }), reached = new Promise(resolve => { arrived = resolve; });
@@ -68,8 +68,34 @@ test('真实后端修复 Continue 策略、重复标签、页面故障与暂停�
     app = await browser(server, { duplicate: true }); await app.seed(); await app.tick();
     assert.equal((await app.list())[0].reason, 'ambiguous_tabs'); assert.equal((await app.list())[0].state, 'paused'); app.close();
 
-    app = await browser(server, { unsupported: true }); await app.seed(); await app.tick();
-    assert.equal((await app.list())[0].state, 'paused'); assert.equal((await app.list())[0].reason, 'unsupported'); app.close();
+    // 刷新期间页面模型不完整不能永久暂停；就绪后使用原任务继续，不重置控制版本、预算或期限。
+    app = await browser(server, { unsupported: true }); await app.seed();
+    const beforeRefresh = (await app.list())[0];
+    await app.tick(); await app.tick();
+    const waiting = (await app.list())[0];
+    assert.equal(waiting.state, 'running'); assert.equal(waiting.reason, '');
+    assert.equal(waiting.id, beforeRefresh.id); assert.equal(waiting.generation, beforeRefresh.generation);
+    assert.equal(waiting.rounds, beforeRefresh.rounds);
+    assert.equal(app.requests.some(request => ['pause', 'observe', 'repair', 'prepare', 'authorize'].includes(request.action)), false);
+    assert.equal(app.sends.length, 0);
+    app.page.supported = true; app.page.busy = true;
+    await app.tick();
+    assert.equal(app.requests.some(request => request.action === 'observe'), true);
+    assert.equal((await app.list())[0].id, beforeRefresh.id); assert.equal(app.sends.length, 0); app.close();
+
+    // 使用真实 Server 的严格绑定校验，证明项目显示路径变化不需要迁移任务或重新授予预算。
+    const project = '/g/g-p-' + 'a'.repeat(32);
+    app = await browser(server, { prefix: project }); await app.seed();
+    const originalProjectTask = (await app.list())[0];
+    const projectActionsAt = app.requests.length;
+    app.page.url = `https://chatgpt.com${project}-plotjuggler/c/${originalProjectTask.binding.conversation}`;
+    app.page.busy = true; await app.tick();
+    const projectTask = (await app.list())[0];
+    assert.equal(projectTask.state, 'running'); assert.equal(projectTask.reason, '');
+    assert.equal(projectTask.id, originalProjectTask.id); assert.equal(projectTask.generation, originalProjectTask.generation);
+    assert.equal(projectTask.binding.prefix, project); assert.equal(projectTask.rounds, originalProjectTask.rounds);
+    assert.equal(app.requests.filter(request => request.action === 'observe').length, 1);
+    assert.equal(app.requests.slice(projectActionsAt).some(request => ['pause', 'repair', 'start'].includes(request.action)), false); app.close();
 
     app = await browser(server, { uninjectable: true }); await app.seed(); await app.tick();
     assert.equal(app.requests.some(request => request.action === 'repair' && request.kind === 'wake'), true);
