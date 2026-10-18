@@ -102,13 +102,12 @@ pub(crate) fn fingerprint(page: &Observation) -> String {
     )
 }
 
-/// 记录公开进展并在已刷新、静默且空闲时预留一次恢复消息；不会停止生成或批准工具。
+/// 空闲的传输中断或已确认刷新按任务间隔续跑；其他未完成回合等待静默，不停止生成或批准工具。
 /// # 参数
 /// - `task`：事务内任务副本，仅修改恢复计时、待发状态和原因。
 /// - `page`：同一用户回合的完整公开状态。
 /// - `now`：当前 Unix 毫秒时间；不能延长授权截止时间。
 pub(crate) fn watch(task: &mut Task, page: &Observation, now: i64) {
-    task.recovery.window_seconds = window_seconds(task, page);
     // 只在确认新主文档后开始修复后的静默窗口；领取后崩溃不能冒充已刷新。
     if task.recovery.repaired_at != 0
         && !task.recovery.confirmed
@@ -118,6 +117,22 @@ pub(crate) fn watch(task: &mut Task, page: &Observation, now: i64) {
         task.recovery.confirmed = true;
         task.recovery.progress_at = now;
     }
+    // 刷新后已空闲但没有最终答复时也可恢复；断线提示消失不能重新进入生成等待窗口。
+    let idle_recovery = (page.interrupted
+        || (task.recovery.confirmed && task.recovery.repaired_at != 0))
+        && !page.busy
+        && !page.tools_busy
+        && !page.draft
+        && !page.blocked
+        && !page.approval
+        && !page.activity.thinking_failed
+        && !page.activity.rate_limited
+        && !page.activity.stop_requested;
+    task.recovery.window_seconds = if idle_recovery {
+        task.options.delay
+    } else {
+        window_seconds(task, page)
+    };
     let hash = fingerprint(page);
     if task.recovery.fingerprint != hash || page.tools_busy || page.draft {
         task.recovery.fingerprint = hash;
@@ -130,6 +145,7 @@ pub(crate) fn watch(task: &mut Task, page: &Observation, now: i64) {
     let window = i64::from(task.recovery.window_seconds) * 1000;
     if task.options.policy.recovery
         && task.recovery.attempts >= MAX_REPAIRS
+        && !idle_recovery
         && !page.reply.as_ref().is_some_and(|reply| reply.terminal)
         && !page.tools_busy
         && !page.draft
@@ -146,10 +162,11 @@ pub(crate) fn watch(task: &mut Task, page: &Observation, now: i64) {
         || page.blocked
         || page.approval
         || page.reply.as_ref().is_some_and(|r| r.terminal)
-        || !task.recovery.confirmed
-        || task.recovery.repaired_at == 0
         || now - task.recovery.progress_at < window
-        || now - task.recovery.repaired_at < window
+        || (!idle_recovery
+            && (!task.recovery.confirmed
+                || task.recovery.repaired_at == 0
+                || now - task.recovery.repaired_at < window))
     {
         return;
     }
@@ -177,8 +194,8 @@ pub(crate) fn watch(task: &mut Task, page: &Observation, now: i64) {
 /// 领取一次浏览器修复；先持久化预算再返回动作，失败不修改浏览器。
 /// # 参数
 /// - `task`：事务中的当前任务，暂停/完成不得修复，未知投递只能重新打开用于对账。
-/// - `kind`：只接受 open 或 reload。
-/// - `page`：reload 的完整当前观测；open 必须为 None。
+/// - `kind`：只接受 open、reload 或 wake；wake 供确切加载错误的重试。
+/// - `page`：reload 的完整当前观测；open 和 wake 必须为 None。
 /// - `now`：Unix 毫秒时间；用于冷却和授权检查。
 /// # Errors
 /// 非法动作返回 Invalid；预算、冷却、用户输入或状态不符返回 Conflict。
@@ -223,7 +240,18 @@ pub(crate) fn claim(
     } else if page.is_some() {
         return Err(Error::Invalid);
     }
-    task.recovery.document_id = page.map_or_else(String::new, |page| page.document_id.clone());
+    // 无页面的重开也保留最近已验证文档；再次看到旧文档不能当作修复成功。
+    task.recovery.document_id = String::new();
+    if let Some(page) = page {
+        task.recovery.document_id.clone_from(&page.document_id);
+    } else {
+        for event in task.journal.iter().rev() {
+            if !event.document_id.is_empty() {
+                task.recovery.document_id.clone_from(&event.document_id);
+                break;
+            }
+        }
+    }
     task.recovery.confirmed = false;
     task.recovery.attempts += 1;
     task.recovery.repaired_at = now;

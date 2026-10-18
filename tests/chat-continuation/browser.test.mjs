@@ -193,6 +193,44 @@ test('Chromium 验证确切 terminal、无草稿发送及 popup 明暗中英文�
     assert.equal((await evaluate(`(${pageAction})('send',${JSON.stringify(sendInput)})`)).sent, true);
     assert.equal(await evaluate('window.clickedText'), text);
     assert.equal((await evaluate(`(${pageAction})('send',${JSON.stringify(sendInput)})`)).sent, false);
+    // 合成新版 ProseMirror 的逐行 p 和末尾占位 BR；保留空行、空格和软换行，不能按排版 innerText 误拒绝。
+    await evaluate(`window.originalInsert=document.execCommand.bind(document);window.mutateParagraph=false;window.asyncParagraph=false;
+      // command/show 沿用编辑命令，value 是合成正文；仅替换测试 DOM，不执行真实页面编辑。
+      document.execCommand=function(command,show,value){
+        if(command!=='insertText'||!value)return originalInsert(command,show,value);
+        const editor=document.querySelector('form [contenteditable="true"]');
+        // render 捕获本次合成正文和编辑器；模拟受控输入异步提交，不访问个人页面。
+        const render=()=>{editor.replaceChildren();
+        for(const line of value.split('\\n')){const p=document.createElement('p');
+          if(line)p.textContent=line;else {const br=document.createElement('br');br.className='ProseMirror-trailingBreak';p.appendChild(br);}editor.appendChild(p);}
+        if(editor.children.length>4){const p=editor.children[2],next=p.nextElementSibling;
+          p.appendChild(document.createElement('br'));p.appendChild(next.firstChild);next.remove();}
+        if(mutateParagraph)editor.lastChild.appendChild(document.createTextNode('人工修改'));
+        };
+        if(asyncParagraph){editor.textContent='临时段落同步中';setTimeout(render,30);}else render();
+        return true;
+      };document.querySelector('form [contenteditable="true"]').textContent='';`);
+    const paragraphInput = { ...sendInput, text: '[[WC_SEND:paragraphs]]\n\n保留  双空格\n下一段\n' };
+    const paragraphSend = await evaluate(`(${pageAction})('send',${JSON.stringify(paragraphInput)})`);
+    assert.equal(paragraphSend.sent, true, JSON.stringify(paragraphSend));
+    assert.notEqual(await evaluate('window.clickedText'), paragraphInput.text);
+    await evaluate(`document.querySelector('form [contenteditable="true"]').textContent='';window.asyncParagraph=true;window.clickedText=null;`);
+    const asyncParagraphSend = await evaluate(`(${pageAction})('send',${JSON.stringify(paragraphInput)})`);
+    assert.equal(asyncParagraphSend.sent, true, JSON.stringify(asyncParagraphSend));
+    assert.notEqual(await evaluate('window.clickedText'), null);
+    await evaluate('window.asyncParagraph=false');
+    await evaluate(`document.querySelector('form [contenteditable="true"]').textContent='';window.mutateParagraph=true;window.clickedText=null;`);
+    const changedParagraph = await evaluate(`(${pageAction})('send',${JSON.stringify(paragraphInput)})`);
+    assert.equal(changedParagraph.sent, false);
+    assert.equal(changedParagraph.cleared, false);
+    assert.equal(await evaluate('window.clickedText'), null);
+    assert.match(await evaluate('document.querySelector("form [contenteditable=true]").textContent'), /人工修改$/);
+    // 无发送按钮时只清理确切的本次纯文本；不能留下自动草稿阻塞后续恢复。
+    await evaluate(`window.mutateParagraph=false;document.querySelector('form [contenteditable="true"]').textContent='';document.querySelector('form button').disabled=true;`);
+    const unavailableButton = await evaluate(`(${pageAction})('send',${JSON.stringify(paragraphInput)})`);
+    assert.equal(unavailableButton.sent, false);
+    assert.equal(unavailableButton.cleared, true);
+    await evaluate(`document.execCommand=window.originalInsert;document.querySelector('form button').disabled=false;`);
     // 不同可见聊天输入框造成歧义时拒绝；隐藏副本不影响唯一可见输入框。
     await evaluate(`document.querySelector('form [contenteditable="true"]').textContent='';document.body.insertAdjacentHTML('beforeend','<form id="other-composer" data-chatgpt-composer><div role="textbox" class="ProseMirror" contenteditable="true">其他草稿</div></form>')`);
     assert.equal((await evaluate(`(${pageAction})()`)).supported, false);
@@ -214,6 +252,28 @@ test('Chromium 验证确切 terminal、无草稿发送及 popup 明暗中英文�
     await evaluate(`document.querySelector('[data-testid="stop-button"]').remove()`);
     assert.equal((await evaluate(`(${pageAction})()`)).activity.stop_requested, true);
     assert.equal((await evaluate(`(${pageAction})('arm')`)).activity.stop_requested, false);
+    // 新版 Stop/停止位于输入表单；MAIN 与隔离观察器都只接受真实主聊天点击，不接受工具按钮或合成事件。
+    await evaluate(`window.observedStops=[];window.chrome={runtime:{id:'modern-stop',sendMessage:async message=>{observedStops.push(message)}}};` + await readFile(path.join(ROOT, 'activity.js'), 'utf8'));
+    for (const label of ['停止', 'Stop']) {
+      await evaluate(`document.querySelector('form').insertAdjacentHTML('beforeend','<button id="modern-stop" type="button" aria-label="${label}">Stop fixture</button>');observedStops=[];document.querySelector('#modern-stop').click()`);
+      assert.equal((await evaluate(`(${pageAction})()`)).busy, true);
+      assert.equal((await evaluate(`(${pageAction})()`)).activity.stop_requested, false);
+      assert.equal(await evaluate('observedStops.some(message=>message.stop===true)'), false);
+      const point = await evaluate(`{const r=document.querySelector('#modern-stop').getBoundingClientRect();({x:r.x+r.width/2,y:r.y+r.height/2})}`);
+      await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 }, sessionId);
+      await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 }, sessionId);
+      assert.equal((await evaluate(`(${pageAction})()`)).activity.stop_requested, true);
+      assert.equal(await evaluate('observedStops.some(message=>message.stop===true)'), true);
+      await evaluate("document.querySelector('#modern-stop').remove()");
+      await evaluate(`(${pageAction})('arm')`);
+    }
+    await evaluate(`observedStops=[];document.body.insertAdjacentHTML('beforeend','<button id="tool-stop" aria-label="停止">Tool fixture</button>')`);
+    const toolStop = await evaluate(`{const r=document.querySelector('#tool-stop').getBoundingClientRect();({x:r.x+r.width/2,y:r.y+r.height/2})}`);
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', ...toolStop, button: 'left', clickCount: 1 }, sessionId);
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...toolStop, button: 'left', clickCount: 1 }, sessionId);
+    assert.equal((await evaluate(`(${pageAction})()`)).activity.stop_requested, false);
+    assert.equal(await evaluate('observedStops.some(message=>message.stop===true)'), false);
+    await evaluate("document.querySelector('#tool-stop').remove()");
     await evaluate(`document.querySelector('form [contenteditable="true"]').textContent=''; fixtureMessages.push({id:'a2',author:{role:'assistant'},channel:'final',status:'in_progress',end_turn:false,content:{parts:['未完成']}});`);
     assert.equal((await evaluate(`(${pageAction})()`)).reply.terminal, false);
     // 同一未完成回合只有 Server 授权的恢复发送可通过；仍检查草稿和审批。
@@ -239,8 +299,54 @@ test('Chromium 验证确切 terminal、无草稿发送及 popup 明暗中英文�
     }`);
     const committed = await evaluate(`(${pageAction})()`);
     assert.equal(committed.reply.id, 'a2'); assert.equal(committed.reply.terminal, false);
+    await evaluate("{const row=document.querySelector('article'), main=document.createElement('main');row.before(main);main.appendChild(row);true}");
+    // 提供方当前回合的传输超时可恢复；额度限制和人工错误仍保留各自阻挡，历史超时不影响新回合。
+    for (const text of ['消息传输超时。请重试。', 'Message transmission timed out. Please retry.']) {
+      await evaluate(`document.querySelector('article').insertAdjacentHTML('beforeend','<aside role="alert">${text}</aside>')`);
+      const interrupted = await evaluate(`(${pageAction})()`);
+      assert.equal(interrupted.interrupted, true); assert.equal(interrupted.blocked, false);
+      await evaluate("document.querySelector('[role=alert]').remove()");
+    }
+    // 当前回合的灰色断线状态同样是中断；回合外、隐藏或超长提示均不驱动恢复。
+    for (const [extra, expected] of [['', true], ['hidden', false]]) {
+      await evaluate(`document.querySelector('article').insertAdjacentHTML('beforeend','<div role="status" ${extra}><span class="text-chatgpt-recovery">连接已中断，正在等待完整答复</span></div>')`);
+      assert.equal((await evaluate(`(${pageAction})()`)).interrupted, expected);
+      await evaluate("document.querySelector('[role=status]').remove()");
+    }
+    await evaluate("document.querySelector('main').insertAdjacentHTML('beforeend','<div role=\"status\"><span class=\"text-chatgpt-recovery\">连接已中断，正在等待完整答复</span></div>')");
+    assert.equal((await evaluate(`(${pageAction})()`)).interrupted, false);
+    await evaluate("document.querySelector('[role=status]').remove();document.querySelector('form').insertAdjacentHTML('beforeend','<button id=\"model-level\" aria-label=\"选择 ChatGPT 模型\">思考强度极高</button>')");
+    assert.equal((await evaluate(`(${pageAction})()`)).activity.deliberate, true);
+    await evaluate("document.querySelector('#model-level').textContent='默认'");
+    assert.equal((await evaluate(`(${pageAction})()`)).activity.deliberate, false);
+    await evaluate("document.querySelector('#model-level').remove()");
     await evaluate('testRoot.current.child=null');
     assert.equal((await evaluate(`(${pageAction})()`)).supported, false);
+
+    // 与实际错误页相同的主区域：无输入框、无回合，仅固定标题和 Retry；点击只重试加载，不发送。
+    for (const [title, label] of [['无法加载此 ChatGPT 对话', '重试'], ['Unable to load this ChatGPT conversation', 'Retry']]) {
+      await evaluate(`document.body.innerHTML='<main><div><div>${title}</div><div><button>${label}</button></div></div></main>';
+        window.loadRetries=0;document.querySelector('button').onclick=()=>{window.loadRetries++};`);
+      const failed = await evaluate(`(${pageAction})()`);
+      assert.equal(failed.supported, false); assert.equal(failed.unsupportedReason, 'conversation_load_failed');
+      assert.equal((await evaluate(`(${pageAction})('retry_load',{url:${JSON.stringify(origin + '/c/' + CONVERSATION + '?changed')}})`)).retried, false);
+      assert.equal((await evaluate(`(${pageAction})('retry_load',{url:location.href})`)).retried, true);
+      assert.equal(await evaluate('loadRetries'), 1);
+      await evaluate("document.querySelector('button').disabled=true");
+      assert.equal((await evaluate(`(${pageAction})('retry_load',{url:location.href})`)).retried, false);
+      await evaluate("document.querySelector('button').disabled=false;document.querySelector('main').insertAdjacentHTML('beforeend','<button>" + label + "</button>')");
+      assert.equal((await evaluate(`(${pageAction})('retry_load',{url:location.href})`)).retried, false);
+      assert.equal(await evaluate('loadRetries'), 1);
+    }
+    // 正文引用错误文案、主区域外按钮、未知提示和页面已恢复都不能成为加载重试入口。
+    for (const extra of ['<article data-testid="conversation-turn-1"></article>', '<div id="prompt-textarea" contenteditable="true"></div>']) {
+      await evaluate(`document.body.innerHTML='<main><div><div>无法加载此 ChatGPT 对话</div><div><button>重试</button></div></div>${extra}</main>'`);
+      assert.equal((await evaluate(`(${pageAction})('retry_load',{url:location.href})`)).retried, false);
+    }
+    await evaluate("document.body.innerHTML='<main><div><div>需要登录</div><div><button>重试</button></div></div></main>'");
+    assert.equal((await evaluate(`(${pageAction})('retry_load',{url:location.href})`)).retried, false);
+    await evaluate("document.body.innerHTML='<aside><div><div>无法加载此 ChatGPT 对话</div><div><button>重试</button></div></div></aside><main></main>'");
+    assert.equal((await evaluate(`(${pageAction})('retry_load',{url:location.href})`)).retried, false);
 
     // popup 使用 Chrome API fake；它只记录指令，绝不将按钮操作发送给真实会话。
     await cdp.call('Page.addScriptToEvaluateOnNewDocument', { source: `globalThis.configureFailure=true;globalThis.permissionGranted=true;globalThis.savedConnection=true;globalThis.chrome={
@@ -344,6 +450,13 @@ test('Chromium 验证确切 terminal、无草稿发送及 popup 明暗中英文�
     await until(() => evaluate('document.querySelector("#status").textContent.includes("自动重试中")'));
     await evaluate('document.querySelector("#language").click()');
     assert.match(await evaluate('document.querySelector("#status").textContent'), /retrying automatically/);
+    await evaluate('popupTasks.find(task=>task.id==="waiting-task").pageStatus="conversation_load_failed";document.querySelector("#connectionForm").requestSubmit()');
+    await until(() => evaluate('document.querySelector("#status").textContent.includes("recovery budget")'));
+    await evaluate('document.querySelector("#language").click()');
+    assert.match(await evaluate('document.querySelector("#status").textContent'), /对话加载失败/);
+    await evaluate('popupTasks.find(task=>task.id==="waiting-task").pageStatus="transport_interrupted";document.querySelector("#connectionForm").requestSubmit()');
+    await until(() => evaluate('document.querySelector("#status").textContent.includes("传输已中断")'));
+    assert.match(await evaluate('document.querySelector("#status").textContent'), /续跑已启用/);
     // 加载生产扩展并打开真实 action popup，不用普通网页的固定视口替代尺寸验收。
     const { id } = await cdp.call('Extensions.loadUnpacked', { path: ROOT });
     const worker = await until(async () => (await cdp.call('Target.getTargets')).targetInfos.find(info => info.type === 'service_worker' && info.url === `chrome-extension://${id}/worker.mjs`));

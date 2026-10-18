@@ -321,6 +321,8 @@ impl Store {
     /// - `owner`：HTTP 层验证的账户主键，客户端 JSON 不能指定。
     /// - `request`：已反序列化操作，其边界在此继续校验。
     /// - `now`：当前 Unix 毫秒时间。
+    /// # Errors
+    /// 无效输入、账户或版本不匹配及存储失败返回对应错误；未提交事务自动回滚，不授予发送权。
     pub fn apply(&mut self, owner: &str, request: Request, now: i64) -> Result<Response, Error> {
         let tx = self
             .connection
@@ -477,6 +479,15 @@ impl Store {
                     }
                 }
                 drop(statement);
+                // 自动暂停或已明确未发送的失败保留同回合刷新证明；未知投递和人工暂停不能沿用。
+                let retain_repair =
+                    matches!(task.reason.as_str(), "recovery_exhausted" | "send_failed")
+                        && task.expected_user == page.user_id
+                        && task.expected_user_hash == user_hash(&page.user_text)
+                        && task.pending.is_none()
+                        && task.delivery.authorized_at.is_none()
+                        && task.recovery.confirmed
+                        && task.recovery.repaired_at != 0;
                 task.request_id = request_id;
                 task.binding = binding;
                 task.options = options;
@@ -507,12 +518,19 @@ impl Store {
                 task.delivery = Delivery::default();
                 task.observed_at = now;
                 task.answer_keys.clear();
-                task.recovery = Recovery {
-                    progress_at: now,
-                    fingerprint: recovery::fingerprint(&page),
-                    finish_id: page.finish_id.clone(),
-                    ..Recovery::default()
-                };
+                if retain_repair {
+                    task.recovery.pending = false;
+                    task.recovery.progress_at = now;
+                    task.recovery.fingerprint = recovery::fingerprint(&page);
+                    task.recovery.finish_id = page.finish_id.clone();
+                } else {
+                    task.recovery = Recovery {
+                        progress_at: now,
+                        fingerprint: recovery::fingerprint(&page),
+                        finish_id: page.finish_id.clone(),
+                        ..Recovery::default()
+                    };
+                }
                 task
             }
             Request::Update {

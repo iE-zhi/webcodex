@@ -564,7 +564,7 @@ pub(crate) struct Recovery {
     /// 上次观察仍有额度/速率限制，防止同一静态提示不断延长等待。
     #[serde(default)]
     pub provider_active: bool,
-    /// 本回合实际静默窗口，单位秒；旧记录零时采用用户策略，模型可延长等待。
+    /// 本回合恢复等待秒数；零按用户策略，空闲中断或确认刷新后按任务间隔，其他状态采用模型静默窗口。
     #[serde(default)]
     pub window_seconds: u32,
     /// 最近公开状态摘要，变化时重新开始静默计时。
@@ -573,7 +573,7 @@ pub(crate) struct Recovery {
     pub progress_at: i64,
     /// 本回合已领取的刷新/重开次数，最多三次。
     pub attempts: u32,
-    /// 最近领取修复的 Unix 毫秒时间，领取后至少等待静默窗口。
+    /// 最近领取修复的 Unix 毫秒时间；浏览器修复动作遵守当前恢复窗口的冷却。
     pub repaired_at: i64,
     /// 当前待发正文是否用于未完成回合的恢复。
     pub pending: bool,
@@ -581,7 +581,7 @@ pub(crate) struct Recovery {
     pub finish_id: Option<String>,
     /// 本用户回合是否收到新的 finish；收到最终回复后消费。
     pub finish_seen: bool,
-    /// 刷新前主文档 ID；打开标签时为空，不跨回合继承。
+    /// 修复前最近已验证的主文档 ID；从未取得文档时为空，不跨用户回合继承。
     #[serde(default)]
     pub document_id: String,
     /// 已观察到修复后的新主文档；仅领取修复动作不能作为完成证明。

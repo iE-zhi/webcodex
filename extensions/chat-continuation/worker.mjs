@@ -8,7 +8,7 @@ import { arm, disarm, listPrearms, intent, candidate, consume, prearmFailure } f
 const CONNECTION = 'continuation.connection.v2';
 /** 扩展安装 UUID，保留到用户清除扩展数据。 */
 const CLIENT = 'continuation.client.v2';
-/** 浏览器进程 UUID，重启后不能继承旧标签发送权。 */
+/** 扩展加载期 UUID；扩展重载或浏览器重启后须凭当前页面重新绑定，不能继承旧发送权。 */
 const BROWSER = 'continuation.browser.v2';
 /** 浏览器会话内真实 Stop 记录；按标签和主文档隔离，重启浏览器后清空。 */
 const STOPS = 'continuation.stops.v1';
@@ -41,10 +41,23 @@ function waitForPage(task) {
   if (pageWaits.size > MAX_PAGE_WAITS) pageWaits.delete(pageWaits.keys().next().value);
 }
 
-/** 页面模型未就绪时保留服务端授权并等待后续观察；完整正文超限仍须明确暂停。 */
-async function pageReady(settings, task, snapshot) {
-  if (snapshot.page.supported) { pageWaits.delete(task.id); return true; }
-  if (snapshot.page.unsupportedReason === 'page_limit') {
+/** 页面未就绪时保留任务；确切加载错误领取 Server 修复预算后重试，currentControl 阻止暂停后的晚到动作。 */
+async function pageReady(settings, task, snapshot, tabId, currentControl) {
+  if (snapshot.page.supported) {
+    if (snapshot.page.interrupted) pageWaits.set(task.id, 'transport_interrupted');
+    else pageWaits.delete(task.id);
+    return true;
+  }
+  if (snapshot.page.unsupportedReason === 'conversation_load_failed') {
+    pageWaits.set(task.id, 'conversation_load_failed');
+    if (!currentControl()) return false;
+    // 使用已有持久化唤醒预算和冷却；不另建本地次数，不刷新失败页面或重建任务。
+    const permit = await api(settings, { action: 'repair', ...selector(task), kind: 'wake', page: null });
+    if (permit.repair !== 'wake' || !currentControl()) return false;
+    const result = await chrome.scripting.executeScript({ target: { tabId, documentIds: [snapshot.documentId] }, world: 'MAIN',
+      func: pageAction, args: ['retry_load', { url: snapshot.page.url }] });
+    if (result.length !== 1 || result[0].result?.retried !== true) console.warn('Continuation load retry deferred; page changed.');
+  } else if (snapshot.page.unsupportedReason === 'page_limit') {
     pageWaits.delete(task.id);
     await pause(settings, task, 'page_limit');
   } else {
@@ -226,9 +239,11 @@ async function pause(settings, task, reason) {
   return api(settings, { action: 'pause', ...selector(task), reason });
 }
 
-/** 查找确切会话；项目名称别名不改变身份，导航暂停须由当前标签地址确认，重开仍须领取预算。 */
-async function locate(settings, task, browser) {
+/** 查找确切会话；导航由当前标签确认，currentControl 在加载重试前检查取消状态，重开仍须领取预算。 */
+async function locate(settings, task, browser, currentControl) {
   let snapshot;
+  /** 本轮已验证的标签；身份变化不否定仍然可读取的原绑定标签。 */
+  let tabId = task.binding.tab_id;
   try { snapshot = await inspect(task.binding.tab_id); } catch { /* 原标签关闭，继续查找同一会话。 */ }
   /** page 为只读快照或标签地址；身份按固定项目和会话判断，不按项目显示名称判断。 */
   const matches = page => matchesConversation(page.url, task.binding);
@@ -241,9 +256,13 @@ async function locate(settings, task, browser) {
     if (tab.status !== 'complete' || !url || tab.pendingUrl && tab.pendingUrl !== tab.url || matches({ url }) || url !== snapshot.page.url) {
       waitForPage(task); return null;
     }
+    // 同源首页、项目首页和错误跳转页没有确切新会话；complete 只说明文档加载，不能证明聊天已切换。
+    if (!chatLocation(url) && new URL(url).origin === task.binding.origin) {
+      waitForPage(task); return null;
+    }
     await pause(settings, task, 'navigation'); return null;
   }
-  if (!snapshot || !matches(snapshot.page) || task.binding.browser !== browser) {
+  if (!snapshot || !matches(snapshot.page)) {
     const url = `${task.binding.origin}${task.binding.prefix}/c/${task.binding.conversation}`;
     const tabs = await chrome.tabs.query({ url: `${task.binding.origin}/*` });
     const exact = tabs.filter(tab => matches({ url: tab.pendingUrl || tab.url || '' }));
@@ -259,13 +278,18 @@ async function locate(settings, task, browser) {
     }
     try { snapshot = await inspect(exact[0].id); }
     catch {
-      const permit = await api(settings, { action: 'repair', ...selector(task), kind: 'wake', page: null });
-      if (permit.repair === 'wake') await chrome.tabs.reload(exact[0].id);
+      // 无法读取不能证明回合中断；保留任务并轮询，避免把暂时无响应升级为刷新循环。
+      waitForPage(task);
       return null;
     }
     if (!matches(snapshot.page)) return null;
-    if (!await pageReady(settings, task, snapshot)) return null;
-    const replacement = { ...task.binding, browser, tab_id: exact[0].id };
+    tabId = exact[0].id;
+  }
+  if (task.binding.browser !== browser || task.binding.tab_id !== tabId) {
+    // 原标签仍匹配时优先使用其确切主文档；其他副本不能抢占它，Server 再校验原回合和版本。
+    if (!await pageReady(settings, task, snapshot, tabId, currentControl)) return null;
+    if (!currentControl()) return null;
+    const replacement = { ...task.binding, browser, tab_id: tabId };
     const rebound = await api(settings, { action: 'rebind', ...selector(task), replacement, page: observation(snapshot.page, task.binding) });
     task = rebound.tasks[0];
   }
@@ -293,13 +317,13 @@ async function processTask(settings, original, epoch) {
   /** 所有可能点击的异步边界均检查连接和当前任务取消版本。 */
   const currentControl = () => epoch === connectionEpoch && control === (cancellations.get(original.id) || 0) && stoppedTabs.get(original.binding.tab_id) === stopped;
   const { browser } = await identity();
-  const located = await locate(settings, original, browser);
+  const located = await locate(settings, original, browser, currentControl);
   if (!located) return;
   let { task, snapshot } = located;
   await enableObserver(task.binding.tab_id, snapshot.documentId);
   const stop = stoppedTabs.get(task.binding.tab_id);
   if (stop?.document === snapshot.documentId && matchesConversation(stop.url, task.binding)) { await pause(settings, task, 'user_stopped'); return; }
-  if (!await pageReady(settings, task, snapshot)) return;
+  if (!await pageReady(settings, task, snapshot, task.binding.tab_id, currentControl)) return;
   const observed = await api(settings, { action: 'observe', ...selector(task), page: observation(snapshot.page, task.binding) });
   const current = observed.tasks[0];
   if (!current || !currentControl()) return;
@@ -329,6 +353,8 @@ async function processTask(settings, original, epoch) {
         replyId: snapshot.page.reply?.id, replyText: snapshot.page.reply?.text, recovery: task.recovery_send,
         id: claimed.dispatch.id, text: claimed.dispatch.text }] });
     if (result.length !== 1 || result[0].result?.sent !== true) {
+      // 只记录页面适配器的固定拒绝码，不输出正文、控制令牌或工具数据。
+      console.warn('Continuation send rejected:', result[0]?.result?.reason || 'unknown');
       if (result.length === 1 && result[0].result?.definite === true && result[0].result?.cleared === true) {
         const cleared = await inspect(task.binding.tab_id);
         await api(settings, { action: 'not_sent', ...selector(task), delivery_id: claimed.dispatch.id, page: observation(cleared.page, task.binding) });
@@ -528,6 +554,6 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === ALARM) return tick().catch(() => console.warn('Continuation backend unavailable; no local fallback.'));
 });
-// 重启和更新只恢复身份及观察；旧浏览器绑定在下次观察时暂停。
+// 重启和更新只恢复身份及观察；临时身份变化须在下一次完整快照后重新绑定。
 chrome.runtime.onStartup.addListener(() => { identity().then(installObservers).catch(() => console.error('Continuation observer initialization unavailable.')); });
 chrome.runtime.onInstalled.addListener(() => { identity().then(installObservers).catch(() => console.error('Continuation observer initialization unavailable.')); });

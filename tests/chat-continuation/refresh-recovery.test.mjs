@@ -9,12 +9,12 @@ let sequence = 0;
 const TASK_LIFETIME_MS = 3600000, STALE_PAGE_MS = 120000;
 
 /** 合成已启用任务；rebind 模拟原标签关闭后在唯一新标签等待页面挂载。 */
-async function fixture({ state = 'running', rebind = false } = {}) {
+async function fixture({ state = 'running', rebind = false, browserChanged = false, duplicate = false } = {}) {
   const client = randomUUID(), browser = randomUUID(), events = {}, requests = [], sends = [];
-  const binding = { client, browser, origin: 'https://chatgpt.com', prefix: '', conversation: randomUUID(), tab_id: 7 };
+  const binding = { client, browser: browserChanged ? randomUUID() : browser, origin: 'https://chatgpt.com', prefix: '', conversation: randomUUID(), tab_id: 7 };
   const task = { id: randomUUID(), generation: 5, binding, state, reason: state === 'paused' ? 'user' : '', rounds: 3,
     options: { mode: 'goal', objective: '完成原任务', limit: 100, delay: 30 }, observed_at: Date.now(), next_at: 0, expires_at: Date.now() + TASK_LIFETIME_MS };
-  const app = { task, requests, sends, events, document: 'before-refresh', ready: false, tabStatus: 'complete',
+  const app = { task, requests, sends, events, document: 'before-refresh', ready: false, tabStatus: 'complete', unreadable: false, retries: [], permit: true,
     page: { url: `${binding.origin}/c/${binding.conversation}`, supported: true, busy: false, draft: false, blocked: false,
       userId: 'human', userText: '原请求', reply: { id: 'reply', userId: 'human', terminal: true, text: '待继续' } } };
   /** 只持有合成安装身份；新 worker 使用相同会话存储，不访问个人 Chrome 数据。 */
@@ -27,11 +27,19 @@ async function fixture({ state = 'running', rebind = false } = {}) {
   globalThis.chrome = { storage: { local: storage(local), session: storage(session) },
     runtime: { id: 'refresh', getURL: name => `chrome-extension://refresh/${name}`, onMessage: event('message'), onStartup: event('startup'), onInstalled: event('installed') },
     alarms: { async create() {}, onAlarm: event('alarm') },
-    tabs: { async query() { return [{ id: rebind ? 99 : 7, url: app.page.url, status: app.tabStatus, pendingUrl: app.pendingUrl }]; },
+    tabs: { async query() { return (duplicate ? [99, 7] : [rebind ? 99 : 7]).map(id => ({ id, url: app.page.url, status: app.tabStatus, pendingUrl: app.pendingUrl })); },
       async get(id) { return { id, status: app.tabStatus, url: app.tabUrl || app.page.url, pendingUrl: app.pendingUrl }; },
       async reload() { assert.fail('页面挂载期间不能再次刷新'); }, async create() { assert.fail('已存在唯一会话，不能另开'); } },
     scripting: { async executeScript(request) {
       if (rebind && request.target.tabId === 7) throw new Error('old tab gone');
+      if (request.files) return [{ documentId: app.document }];
+      if (request.args?.[0] === 'retry_load') {
+        assert.deepEqual(request.target.documentIds, [app.document]);
+        assert.equal(request.args[1].url, app.page.url);
+        app.retries.push(request.target.tabId);
+        return [{ result: { retried: true } }];
+      }
+      if (app.unreadable) throw new Error('temporarily unreadable');
       if (request.args?.[0] === 'send') {
         assert.deepEqual(request.target.documentIds, [app.document]);
         assert.equal(request.args[1].url, app.page.url, '网页点击必须核对当前实际路径，不能使用服务端绑定别名');
@@ -52,7 +60,7 @@ async function fixture({ state = 'running', rebind = false } = {}) {
     if (request.action === 'observe' && app.ready && task.state === 'running') task.state = 'ready';
     if (request.action === 'prepare') { task.state = 'prepared'; dispatch = { id: 'one-delivery', text: 'Server 预留的续跑消息' }; }
     if (request.action === 'authorize') { task.state = 'dispatching'; task.send_authorized = true; }
-    return Response.json({ tasks: [structuredClone(task)], dispatch });
+    return Response.json({ tasks: [structuredClone(task)], dispatch, repair: request.action === 'repair' && app.permit ? 'wake' : null });
   };
   /** 重载模块模拟 worker 休眠，不改变安装、任务或浏览器主文档。 */
   app.restartWorker = () => import(`../../extensions/chat-continuation/worker.mjs?refresh=${++sequence}`);
@@ -91,6 +99,83 @@ test('刷新挂载和worker休眠后自动恢复原任务，不暂停、不重�
     assert.equal(app.requests.filter(request => request.action === 'prepare').length, 1);
     assert.equal((await app.list()).tasks[0].pageStatus, '');
   } finally { app.close(); }
+});
+
+// storage.session 随扩展重载清空；原绑定页面仍可验证时，其他同会话副本不能造成重复接管暂停。
+test('扩展重载改变临时身份后优先恢复原标签，有副本也不暂停或抢占', async () => {
+  const app = await fixture({ browserChanged: true, duplicate: true });
+  try {
+    const before = structuredClone(app.task);
+    app.page.supported = false; await app.tick();
+    assert.equal(app.requests.some(request => ['pause', 'repair', 'rebind', 'observe'].includes(request.action)), false);
+    app.page.supported = true; app.ready = true;
+    await app.tick(); await app.tick();
+    assert.equal(app.task.binding.tab_id, 7);
+    assert.notEqual(app.task.binding.browser, before.binding.browser);
+    assert.equal(app.task.generation, before.generation); assert.equal(app.task.rounds, before.rounds);
+    assert.equal(app.task.expires_at, before.expires_at);
+    assert.equal(app.requests.filter(request => request.action === 'rebind').length, 1);
+    assert.equal(app.requests.some(request => ['start', 'pause', 'repair'].includes(request.action)), false);
+    assert.deepEqual(app.sends, ['one-delivery']);
+  } finally { app.close(); }
+});
+
+// 页面不可注入时不消耗恢复次数；可读取的明确加载失败才允许按服务端预算点击重试。
+test('读取异常不刷新；明确加载失败领取预算后重试并恢复原任务', async () => {
+  const app = await fixture();
+  try {
+    const original = structuredClone(app.task);
+    app.unreadable = true;
+    await app.tick(); await app.restartWorker(); await app.tick();
+    assert.equal(app.requests.some(request => ['repair', 'pause', 'observe', 'prepare', 'authorize'].includes(request.action)), false);
+    app.unreadable = false; app.page.supported = false; app.page.unsupportedReason = 'conversation_load_failed';
+    app.permit = false; await app.tick();
+    assert.deepEqual(app.retries, []);
+    assert.equal((await app.list()).tasks[0].pageStatus, 'conversation_load_failed');
+    app.permit = true; await app.tick();
+    assert.deepEqual(app.retries, [7]);
+    assert.equal(app.requests.filter(request => request.action === 'repair').every(request => request.kind === 'wake' && request.page === null), true);
+    app.page.supported = true; app.document = 'loaded-again'; app.ready = true;
+    await app.tick(); await app.tick();
+    assert.deepEqual(app.sends, ['one-delivery']);
+    assert.equal(app.task.id, original.id); assert.equal(app.task.generation, original.generation);
+    assert.equal(app.task.rounds, original.rounds); assert.equal(app.task.expires_at, original.expires_at);
+    assert.equal(app.requests.some(request => ['start', 'pause'].includes(request.action)), false);
+    assert.equal((await app.list()).tasks[0].pageStatus, '');
+  } finally { app.close(); }
+});
+
+// 旧标签消失时只在唯一匹配的新主文档中重试；暂停和完成的任务不得取得任何修复权。
+test('加载失败的唯一恢复标签使用确切文档，已暂停和结束任务不重试', async () => {
+  for (const state of ['running', 'paused', 'done']) {
+    const app = await fixture({ state, rebind: true });
+    try {
+      app.page.supported = false; app.page.unsupportedReason = 'conversation_load_failed';
+      await app.tick();
+      assert.deepEqual(app.retries, state === 'running' ? [99] : []);
+      assert.equal(app.task.binding.tab_id, 7, '未能完整读取会话前不重绑定');
+      assert.equal(app.requests.some(request => ['start', 'rebind', 'observe', 'prepare', 'authorize'].includes(request.action)), false);
+    } finally { app.close(); }
+  }
+});
+
+// SPA 可以在 complete 文档内先回到同源首页再挂载会话；没有确切新会话时只等待，不能永久暂停。
+test('刷新经过已加载的同源首页或错误页后仍自动观察原任务', async () => {
+  for (const route of ['/', '/g/g-p-' + 'a'.repeat(32) + '/project', '/auth/error']) {
+    const app = await fixture();
+    try {
+      const originalUrl = app.page.url;
+      app.page.url = app.task.binding.origin + route;
+      app.page.supported = false;
+      await app.tick(); await app.restartWorker(); await app.tick();
+      assert.equal(app.task.state, 'running');
+      assert.equal(app.requests.some(request => ['pause', 'repair', 'observe', 'prepare', 'authorize'].includes(request.action)), false);
+      app.page.url = originalUrl; app.page.supported = true; app.page.busy = true;
+      await app.tick();
+      assert.equal(app.requests.filter(request => request.action === 'observe').length, 1);
+      assert.equal(app.requests.some(request => request.action === 'start'), false);
+    } finally { app.close(); }
+  }
 });
 
 // 旧标签不可用时，新标签在完整读取前不能重绑定；就绪后自动重绑定并继续观察。

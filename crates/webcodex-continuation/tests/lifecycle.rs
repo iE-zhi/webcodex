@@ -681,14 +681,147 @@ async fn repair(
         .await
 }
 
-/// 未完成回合必须先经过静默与一次持久化刷新；恢复消息仍需一次性领取和确切回执。
+/// 明确空闲传输中断等待三十秒即预留消息；重启保留计时，授权后的未知投递不能重放。
 #[tokio::test]
-async fn interrupted_turn_recovers_after_refresh_without_replaying_unknown_operations() {
+async fn idle_transport_failure_continues_without_refresh_and_preserves_unknown_delivery() {
+    let dir = private_directory();
+    let path = dir.path().join("tasks");
+    let controller = Controller::open(&path, NOW).unwrap();
+    let mut partial = page();
+    partial.reply.as_mut().unwrap().terminal = false;
+    partial.interrupted = true;
+    let task = configured(
+        &controller,
+        Mode::Continue,
+        Policy::default(),
+        partial.clone(),
+    )
+    .await;
+    assert_eq!(
+        observe(&controller, &task, partial.clone(), NOW + 29_999)
+            .await
+            .state,
+        "running"
+    );
+    drop(controller);
+    let controller = Controller::open(&path, NOW + 30_000).unwrap();
+    let ready = observe(&controller, &task, partial.clone(), NOW + 30_000).await;
+    assert_eq!(ready.state, "ready");
+    assert!(ready.recovery_send);
+    assert_eq!(ready.generation, task.generation);
+    assert_eq!(ready.rounds, 0);
+    // event 是真实 SQLite 投影中的控制事件；直接恢复不能领取任何刷新预算。
+    assert!(ready.journal.iter().all(|event| event.kind != "repair"));
+    let claimed = dispatch_at(&controller, &ready, partial.clone(), NOW + 30_000).await;
+    let delivery = claimed.dispatch.as_ref().unwrap().id.clone();
+    assert_eq!(claimed.tasks[0].state, "dispatching");
+    assert_eq!(claimed.tasks[0].rounds, 1);
+    drop(controller);
+    let controller = Controller::open(&path, NOW + 31_000).unwrap();
+    let uncertain = observe(&controller, &claimed.tasks[0], partial, NOW + 31_000).await;
+    assert_ne!(uncertain.state, "ready");
+    assert_eq!(uncertain.delivery_id.as_deref(), Some(delivery.as_str()));
+    assert_eq!(uncertain.rounds, 1);
+}
+
+/// Goal 和 Loop 的空闲传输中断都由当前 ChatGPT 的控制提示续跑，不调用模型 API。
+#[tokio::test]
+async fn goal_and_loop_transport_failures_reserve_current_chat_instructions_without_refresh() {
+    for mode in [Mode::Goal, Mode::Loop] {
+        let dir = private_directory();
+        let controller = Controller::open(&dir.path().join("tasks"), NOW).unwrap();
+        let mut partial = page();
+        partial.reply.as_mut().unwrap().terminal = false;
+        partial.interrupted = true;
+        let task = configured(&controller, mode, Policy::default(), partial.clone()).await;
+        let ready = observe(&controller, &task, partial.clone(), NOW + 30_000).await;
+        assert_eq!(ready.state, "ready");
+        assert!(ready.recovery_send);
+        let claimed = dispatch_at(&controller, &ready, partial, NOW + 30_000).await;
+        assert!(claimed
+            .dispatch
+            .as_ref()
+            .unwrap()
+            .text
+            .contains("WEBCODEX_GOAL"));
+    }
+}
+
+/// 三次浏览器修复预算耗尽后，明确空闲的传输中断仍可使用消息轮数预算续跑，不领取第四次修复。
+#[tokio::test]
+async fn final_browser_repair_does_not_block_idle_transport_continuation() {
     let dir = private_directory();
     let controller = Controller::open(&dir.path().join("tasks"), NOW).unwrap();
     let mut partial = page();
     partial.reply.as_mut().unwrap().terminal = false;
+    let task = configured(
+        &controller,
+        Mode::Continue,
+        Policy {
+            silence_seconds: 120,
+            ..Policy::default()
+        },
+        partial.clone(),
+    )
+    .await;
+    // 三次修复各间隔一百二十秒，只提交预算，不伪造浏览器执行结果。
+    for offset in [0, 120_000, 240_000] {
+        repair(&controller, &task, "wake", None, NOW + offset)
+            .await
+            .unwrap();
+    }
     partial.interrupted = true;
+    observe(&controller, &task, partial.clone(), NOW + 240_001).await;
+    let ready = observe(&controller, &task, partial, NOW + 270_001).await;
+    assert_eq!(ready.state, "ready");
+    assert!(ready.recovery_send);
+    assert!(ready.repair_at.is_none());
+}
+
+/// 合成阻挡分别覆盖生成、工具、草稿、审批、人工 Stop、额度和推理失败；三十秒后均不能直接续跑。
+#[tokio::test]
+async fn transport_recovery_does_not_bypass_busy_draft_approval_stop_limits_or_thinking_failure() {
+    for guard in [
+        "busy", "tools", "draft", "approval", "blocked", "stop", "limit", "thinking",
+    ] {
+        let dir = private_directory();
+        let controller = Controller::open(&dir.path().join("tasks"), NOW).unwrap();
+        let mut partial = page();
+        partial.reply.as_mut().unwrap().terminal = false;
+        partial.interrupted = true;
+        let task = configured(
+            &controller,
+            Mode::Continue,
+            Policy::default(),
+            partial.clone(),
+        )
+        .await;
+        match guard {
+            "busy" => partial.busy = true,
+            "tools" => partial.tools_busy = true,
+            "draft" => partial.draft = true,
+            "approval" => partial.approval = true,
+            "blocked" => partial.blocked = true,
+            "stop" => partial.activity.stop_requested = true,
+            "limit" => partial.activity.rate_limited = true,
+            "thinking" => partial.activity.thinking_failed = true,
+            _ => unreachable!("固定测试分支"),
+        }
+        let first = observe(&controller, &task, partial.clone(), NOW + 1).await;
+        let waiting = observe(&controller, &first, partial, NOW + 30_001).await;
+        assert_ne!(waiting.state, "ready", "{guard}");
+        assert!(waiting.delivery_id.is_none(), "{guard}");
+    }
+}
+
+/// 没有明确传输中断的未完成回合须先静默并确认刷新；恢复消息仍需一次性领取和确切回执。
+#[tokio::test]
+async fn silent_unfinished_turn_recovers_after_refresh_without_replaying_unknown_operations() {
+    let dir = private_directory();
+    let controller = Controller::open(&dir.path().join("tasks"), NOW).unwrap();
+    let mut partial = page();
+    partial.reply.as_mut().unwrap().terminal = false;
+    partial.interrupted = false;
     let task = configured(
         &controller,
         Mode::Goal,
@@ -731,7 +864,7 @@ async fn interrupted_turn_recovers_after_refresh_without_replaying_unknown_opera
         .await,
         Err(Error::Conflict)
     ));
-    // 领取后仍是旧文档时不能续跑；新文档确认后重新等待完整静默窗口。
+    // 领取后仍是旧文档时不能续跑；确认新文档已空闲后等待三十秒任务间隔。
     assert_eq!(
         observe(&controller, &task, partial.clone(), NOW + 240_000)
             .await
@@ -740,10 +873,16 @@ async fn interrupted_turn_recovers_after_refresh_without_replaying_unknown_opera
     );
     partial.document_id = "doc-after".into();
     observe(&controller, &task, partial.clone(), NOW + 240_001).await;
-    let ready = observe(&controller, &task, partial.clone(), NOW + 360_001).await;
+    assert_eq!(
+        observe(&controller, &task, partial.clone(), NOW + 270_000)
+            .await
+            .state,
+        "running"
+    );
+    let ready = observe(&controller, &task, partial.clone(), NOW + 270_001).await;
     assert_eq!(ready.state, "ready");
     assert!(ready.recovery_send);
-    let claimed = dispatch_at(&controller, &ready, partial.clone(), NOW + 360_001).await;
+    let claimed = dispatch_at(&controller, &ready, partial.clone(), NOW + 270_001).await;
     assert!(claimed
         .dispatch
         .as_ref()
@@ -755,10 +894,151 @@ async fn interrupted_turn_recovers_after_refresh_without_replaying_unknown_opera
         claimed,
         format!("全部完成\n{}", marker(&task, "COMPLETE")),
         2,
-        NOW + 360_002,
+        NOW + 270_002,
     )
     .await;
     assert_eq!(done.state, "done");
+}
+
+/// 自动暂停或明确未发送后恢复保留同回合刷新证明；人工暂停、新用户及未知投递不能沿用。
+#[tokio::test]
+async fn exhausted_idle_resume_retains_confirmed_repair_only_for_same_automatic_turn() {
+    for scenario in ["automatic", "manual", "new_user", "not_sent"] {
+        let dir = private_directory();
+        let controller = Controller::open(&dir.path().join("tasks"), NOW).unwrap();
+        let mut partial = page();
+        partial.reply = None;
+        partial.busy = true;
+        partial.activity.deliberate = true;
+        let task = configured(&controller, Mode::Goal, Policy::default(), partial.clone()).await;
+        // 三次预算均由协议领取；第三次以后观察新文档证明刷新，并用显式时钟耗尽生成等待窗口。
+        for offset in [0, 1_200_000, 2_400_000] {
+            repair(&controller, &task, "wake", None, NOW + offset)
+                .await
+                .unwrap();
+        }
+        partial.document_id = "confirmed-after-repair".into();
+        observe(&controller, &task, partial.clone(), NOW + 2_400_001).await;
+        let paused = observe(&controller, &task, partial.clone(), NOW + 3_600_001).await;
+        assert_eq!(paused.reason, "recovery_exhausted");
+        let paused = if scenario == "manual" {
+            controller
+                .handle(
+                    "owner".into(),
+                    Request::Pause {
+                        task_id: paused.id.clone(),
+                        generation: paused.generation,
+                        binding: paused.binding.clone(),
+                        reason: None,
+                    },
+                    NOW + 3_600_002,
+                )
+                .await
+                .unwrap()
+                .tasks
+                .remove(0)
+        } else {
+            paused
+        };
+        partial.busy = false;
+        if scenario == "new_user" {
+            partial.user_id = "different-human-turn".into();
+        }
+        let resumed = controller
+            .handle(
+                "owner".into(),
+                Request::Start {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    task_id: Some(paused.id.clone()),
+                    generation: Some(paused.generation),
+                    binding: paused.binding.clone(),
+                    options: paused.options.clone(),
+                    page: partial.clone(),
+                },
+                NOW + 3_600_003,
+            )
+            .await
+            .unwrap()
+            .tasks
+            .remove(0);
+        assert_eq!(resumed.rounds, 0);
+        assert_eq!(
+            observe(&controller, &resumed, partial.clone(), NOW + 3_630_002)
+                .await
+                .state,
+            "running"
+        );
+        let next = observe(&controller, &resumed, partial.clone(), NOW + 3_630_003).await;
+        if matches!(scenario, "automatic" | "not_sent") {
+            assert_eq!(next.state, "ready");
+            assert!(next.recovery_send);
+            assert!(next.repair_at.is_none());
+            let claimed = dispatch_at(&controller, &next, partial.clone(), NOW + 3_630_003).await;
+            assert_eq!(claimed.tasks[0].rounds, 1);
+            if scenario == "not_sent" {
+                let failed = controller
+                    .handle(
+                        "owner".into(),
+                        Request::Pause {
+                            task_id: next.id.clone(),
+                            generation: next.generation,
+                            binding: next.binding.clone(),
+                            reason: Some("send_failed".into()),
+                        },
+                        NOW + 3_630_004,
+                    )
+                    .await
+                    .unwrap()
+                    .tasks
+                    .remove(0);
+                // 页面明确未点击且已清除自有草稿；用授权时版本清债，不重新启用已暂停任务。
+                let cleared = controller
+                    .handle(
+                        "owner".into(),
+                        Request::NotSent {
+                            task_id: failed.id.clone(),
+                            generation: next.generation,
+                            binding: failed.binding.clone(),
+                            delivery_id: claimed.dispatch.as_ref().unwrap().id.clone(),
+                            page: partial.clone(),
+                        },
+                        NOW + 3_630_005,
+                    )
+                    .await
+                    .unwrap()
+                    .tasks
+                    .remove(0);
+                assert_eq!(cleared.state, "paused");
+                assert!(cleared.delivery_id.is_none());
+                let resumed = controller
+                    .handle(
+                        "owner".into(),
+                        Request::Start {
+                            request_id: uuid::Uuid::new_v4().to_string(),
+                            task_id: Some(cleared.id.clone()),
+                            generation: Some(cleared.generation),
+                            binding: cleared.binding.clone(),
+                            options: cleared.options.clone(),
+                            page: partial.clone(),
+                        },
+                        NOW + 3_630_006,
+                    )
+                    .await
+                    .unwrap()
+                    .tasks
+                    .remove(0);
+                assert_eq!(resumed.rounds, 1);
+                assert!(!resumed.recovery_send);
+                let retry = observe(&controller, &resumed, partial, NOW + 3_660_006).await;
+                assert_eq!(retry.state, "ready");
+                assert_ne!(retry.delivery_id, next.delivery_id);
+                assert!(retry.repair_at.is_none());
+            }
+        } else {
+            assert_eq!(next.state, "running", "{scenario}");
+            assert!(!next.recovery_send, "{scenario}");
+        }
+    }
 }
 
 /// 活跃工具、人工草稿及审批禁止刷新；工具结束后仍需完整静默窗口。

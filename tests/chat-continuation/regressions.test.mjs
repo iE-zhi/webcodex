@@ -6,11 +6,13 @@ import { serverFixture } from './server-fixture.mjs';
 
 /** 模块导入序号使每个场景获得自己的运行期取消版本及身份缓存。 */
 let sequence = 0;
+/** 真实后端最短续跑间隔为三十秒；额外一秒覆盖本机请求调度，不伪造服务端时钟。 */
+const TRANSPORT_OBSERVATION_MS = 31000;
 
 /** 运行一个合成浏览器；options 控制项目路径、重复标签、页面失效和响应交付屏障，server 为测试独占真实实例。 */
-async function browser(server, { duplicate = false, unsupported = false, uninjectable = false, hold = '', prefix = '' } = {}) {
-  const client = randomUUID(), process = randomUUID(), events = {}, requests = [], sends = [], reloads = [];
-  const binding = { client, browser: duplicate ? randomUUID() : process, conversation: randomUUID(), origin: 'https://chatgpt.com', prefix, tab_id: 7 };
+async function browser(server, { duplicate = false, unsupported = false, uninjectable = false, browserChanged = false, hold = '', prefix = '' } = {}) {
+  const client = randomUUID(), process = randomUUID(), events = {}, requests = [], sends = [], reloads = [], retries = [];
+  const binding = { client, browser: duplicate || browserChanged ? randomUUID() : process, conversation: randomUUID(), origin: 'https://chatgpt.com', prefix, tab_id: 7 };
   const page = { url: `https://chatgpt.com${prefix}/c/${binding.conversation}`, supported: !unsupported, userId: 'u1', userText: '原始人工请求', busy: false,
     draft: false, blocked: false, reply: { id: 'a1', userId: 'u1', text: '尚未完成', terminal: true } };
   let release, arrived;
@@ -23,7 +25,13 @@ async function browser(server, { duplicate = false, unsupported = false, uninjec
     runtime: { id: 'regression', getURL: name => `chrome-extension://regression/${name}`, onMessage: event('message'), onStartup: event('startup'), onInstalled: event('installed') },
     tabs: { async query() { return Array.from({ length: duplicate ? 2 : 1 }, (_, index) => ({ id: index + 90, url: page.url })); }, async reload(id) { reloads.push(id); } },
     scripting: { async executeScript(request) {
-      if (uninjectable) throw new Error('isolated unavailable document');
+      if (uninjectable || duplicate && !browserChanged && request.target.tabId === 7) throw new Error('isolated unavailable document');
+      if (request.files) return [{ documentId: 'isolated-document' }];
+      if (request.args?.[0] === 'retry_load') {
+        assert.deepEqual(request.target.documentIds, ['isolated-document']);
+        retries.push(request.target.tabId);
+        return [{ result: { retried: true } }];
+      }
       if (request.args?.[0] === 'cancel') return [{ result: { cancelled: true } }];
       if (!request.args || request.args[0] === 'arm') return [{ documentId: 'isolated-document', result: structuredClone(page) }];
       sends.push(request.args[1].text); page.userId = 'receipt'; page.userText = request.args[1].text;
@@ -48,7 +56,7 @@ async function browser(server, { duplicate = false, unsupported = false, uninjec
       page: { url: page.url, supported: true, busy: false, draft: false, blocked: false, user_id: 'u1', user_text: page.userText, reply: null } });
     assert.equal(result.status, 200);
   };
-  return { page, command, seed, requests, sends, reloads, reached, release,
+  return { page, command, seed, requests, sends, reloads, retries, reached, release,
     list: async () => (await server.api('/api/continuations', { action: 'list', client })).body.tasks,
     tick: () => events.alarm({ name: 'webcodex-continuation' }),
     /** 还原全局 fetch，后续场景不能继承本场景的交付屏障。 */
@@ -67,6 +75,17 @@ test('真实后端修复 Continue 策略、重复标签、页面故障与暂停�
 
     app = await browser(server, { duplicate: true }); await app.seed(); await app.tick();
     assert.equal((await app.list())[0].reason, 'ambiguous_tabs'); assert.equal((await app.list())[0].state, 'paused'); app.close();
+
+    // 重载扩展后原标签仍可完整验证，真实 Server 允许原地更换临时身份，不被其他副本抢占。
+    app = await browser(server, { duplicate: true, browserChanged: true }); await app.seed();
+    const beforeReload = (await app.list())[0];
+    app.page.busy = true; await app.tick();
+    const afterReload = (await app.list())[0];
+    assert.equal(afterReload.state, 'running'); assert.equal(afterReload.binding.tab_id, 7);
+    assert.notEqual(afterReload.binding.browser, beforeReload.binding.browser);
+    assert.equal(afterReload.generation, beforeReload.generation);
+    assert.equal(app.requests.filter(request => request.action === 'rebind').length, 1);
+    assert.equal(app.requests.some(request => ['pause', 'repair'].includes(request.action)), false); app.close();
 
     // 刷新期间页面模型不完整不能永久暂停；就绪后使用原任务继续，不重置控制版本、预算或期限。
     app = await browser(server, { unsupported: true }); await app.seed();
@@ -98,8 +117,43 @@ test('真实后端修复 Continue 策略、重复标签、页面故障与暂停�
     assert.equal(app.requests.slice(projectActionsAt).some(request => ['pause', 'repair', 'start'].includes(request.action)), false); app.close();
 
     app = await browser(server, { uninjectable: true }); await app.seed(); await app.tick();
-    assert.equal(app.requests.some(request => request.action === 'repair' && request.kind === 'wake'), true);
-    assert.deepEqual(app.reloads, [90]); app.close();
+    assert.equal(app.requests.some(request => request.action === 'repair'), false);
+    assert.deepEqual(app.reloads, []); app.close();
+
+    // 明确加载失败共享真实 SQLite 修复预算，连续轮询受冷却约束；恢复后原任务继续且只投递一次。
+    app = await browser(server); await app.seed();
+    const beforeLoadFailure = (await app.list())[0];
+    const recoveryActionsAt = app.requests.length;
+    app.page.supported = false; app.page.unsupportedReason = 'conversation_load_failed';
+    await app.tick(); await app.tick();
+    assert.deepEqual(app.retries, [7]); assert.deepEqual(app.reloads, []);
+    assert.equal((await app.list())[0].id, beforeLoadFailure.id);
+    app.page.supported = true; await app.tick(); await app.tick();
+    assert.equal(app.sends.length, 1); assert.match(app.sends[0], /WEBCODEX_GOAL/);
+    assert.equal((await app.list())[0].generation, beforeLoadFailure.generation);
+    assert.equal(app.requests.slice(recoveryActionsAt).some(request => request.action === 'start'), false); app.close();
+
+    // 同一未完成回合明确传输中断且空闲时，真实 Server 按间隔投递一次，不先刷新或多等静默窗口。
+    app = await browser(server); await app.seed();
+    app.page.reply.terminal = false; app.page.interrupted = true;
+    await app.tick();
+    assert.equal(app.sends.length, 0);
+    // resolve 仅结束这次有界等待，不写任务、推进假时钟或执行网页动作。
+    await new Promise(resolve => setTimeout(resolve, TRANSPORT_OBSERVATION_MS));
+    await app.tick(); await app.tick();
+    assert.equal(app.sends.length, 1);
+    assert.equal(app.requests.some(request => request.action === 'repair'), false);
+    assert.equal((await app.list())[0].rounds, 1); app.close();
+
+    // 暂停发生在已提交预算的响应返回前，晚到许可也不能点击 Retry 或发送消息。
+    app = await browser(server, { hold: 'repair' }); await app.seed();
+    app.page.supported = false; app.page.unsupportedReason = 'conversation_load_failed';
+    const repairing = app.tick(); await app.reached;
+    const repairingTask = (await app.list())[0];
+    assert.equal((await app.command('pause', { taskId: repairingTask.id })).ok, true);
+    app.release(); await repairing;
+    assert.deepEqual(app.retries, []); assert.deepEqual(app.sends, []);
+    assert.equal((await app.list())[0].state, 'paused'); app.close();
 
     for (const hold of ['prepare', 'authorize']) {
       app = await browser(server, { hold });

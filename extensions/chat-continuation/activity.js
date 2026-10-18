@@ -1,7 +1,7 @@
 /** 隔离页面观察器：只唤醒扩展读取公开状态，并转发真实 Stop；不持有 PAT、任务或发送权。 */
 (() => {
   /** 同一隔离文档只允许一个观察器；扩展更新先释放旧监听，重复注入不增加心跳。 */
-  const KEY = '__webcodexContinuationObserver', VERSION = '7';
+  const KEY = '__webcodexContinuationObserver', VERSION = '8';
   if (globalThis[KEY]?.version === VERSION) return;
   globalThis[KEY]?.dispose?.();
   /** 每文档最多每秒一个活动通知，十五秒一个心跳；后台标签仍受 Chrome 调度限制。 */
@@ -40,6 +40,14 @@
     return visible.length === 1 ? visible[0] : null;
   }
 
+  /** button 是本次点击的按钮或 null；只识别主聊天 Stop，工具面板的同名按钮不暂停主聊天。 */
+  function isChatStop(button) {
+    if (!button) return false;
+    if (button.matches('[data-testid="stop-button"],button[aria-label="Stop streaming"],button[aria-label="停止生成"]')) return true;
+    const form = composer()?.closest('form');
+    return Boolean(form && form.contains(button) && button.matches('button[aria-label="Stop"],button[aria-label="停止"]'));
+  }
+
   /** 只在空白聊天或明确项目首页的真实发送操作中记录首发意图；正文只用于 worker 比较摘要。 */
   function firstSend(event) {
     if (closed || !event.isTrusted) return;
@@ -67,7 +75,7 @@
   /** 捕获原生用户点击；event 的合成输入不能暂停或启动自动任务。 */
   function clicked(event) {
     const button = event.target?.closest?.('button');
-    if (event.isTrusted && button?.matches('[data-testid="stop-button"],button[aria-label="Stop streaming"],button[aria-label="停止生成"]')) notify(true);
+    if (event.isTrusted && isChatStop(button)) notify(true);
     else if (button?.matches('[data-testid="send-button"],#composer-submit-button,form[data-chatgpt-composer] button[type="submit"]') && !button.disabled && button.getAttribute('aria-disabled') !== 'true') firstSend(event);
     else if (event.isTrusted && event.target?.closest?.('a[href]')) {
       // 人工导航不属于首次发送，撤销预置；不会触碰已存在的 Server 任务。

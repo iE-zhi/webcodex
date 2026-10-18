@@ -2,7 +2,7 @@
 
 /**
  * Chrome scripting 注入入口；必须自包含，不能捕获扩展环境。
- * action 为 snapshot 或 send；input 含预期 URL、用户/回复 ID 与正文，以及已持久化的发送正文。
+ * action 为 snapshot、retry_load 或 send；input 含预期 URL，以及发送时需核对的回合和正文。
  * 页面结构未知、身份冲突、草稿或生成中均拒绝发送；发送异常由 worker 保留未知状态。
  */
 export async function pageAction(action = 'snapshot', input = null) {
@@ -14,6 +14,8 @@ export async function pageAction(action = 'snapshot', input = null) {
   const MAX_ROOT_DEPTH = 2048, MAX_SIBLINGS = 4096;
   /** 提供方消息 ID 上限 200 字符；只在至多 16 个公开内容引用中查找确切回退正文。 */
   const MAX_ID = 200, MAX_REFERENCES = 16;
+  /** 公开恢复提示和模型菜单正文最多 512 字符；超限不据此改变状态。 */
+  const MAX_STATUS_TEXT = 512;
   /** 页面内活动观察器唯一键；不保存凭据或任何推理/工具正文，离开主文档即销毁。 */
   const ACTIVITY_KEY = '__webcodexContinuationActivityV2';
   let activity = window[ACTIVITY_KEY];
@@ -23,7 +25,7 @@ export async function pageAction(action = 'snapshot', input = null) {
     // 捕获阶段记录真实停止意图；页面脚本合成点击不能清除或授予续跑权限。
     document.addEventListener?.('click', event => {
       const button = event.target?.closest?.('button');
-      if (event.isTrusted && button?.matches('[data-testid="stop-button"],button[aria-label="Stop streaming"],button[aria-label="停止生成"]')) activity.stopped = activity.user;
+      if (event.isTrusted && isChatStop(button)) activity.stopped = activity.user;
     }, true);
   }
   if (action === 'arm') activity.stopped = '';
@@ -46,6 +48,14 @@ export async function pageAction(action = 'snapshot', input = null) {
     return visible.length === 1 ? visible[0] : null;
   }
 
+  /** button 为本次点击的按钮或 null；只认主聊天的专用标记或当前输入表单，忽略工具卡同名按钮。 */
+  function isChatStop(button) {
+    if (!button) return false;
+    if (button.matches('[data-testid="stop-button"],button[aria-label="Stop streaming"],button[aria-label="停止生成"]')) return true;
+    const form = composer()?.closest('form');
+    return Boolean(form && form.contains(button) && button.matches('button[aria-label="Stop"],button[aria-label="停止"]'));
+  }
+
   /** 识别输入框所属区域的附件及上传状态；没有文字的附件同样属于人工草稿。 */
   function attachments() {
     const editor = composer();
@@ -55,6 +65,24 @@ export async function pageAction(action = 'snapshot', input = null) {
     if (host.querySelector?.('[data-inline-file-uploading],[role="progressbar"],[data-testid="file-upload"],[data-testid="attachment"]')) return true;
     return [...(host.querySelectorAll?.('button[aria-label]') || [])].some(button =>
       /^(?:remove|delete)\s+(?:file|attachment|image)|(?:移除|删除).*(?:文件|附件|图片)/i.test(button.getAttribute('aria-label') || ''));
+  }
+
+  /** 只识别无聊天内容的主区域加载错误及唯一可见重试按钮；不匹配聊天正文中的引用。 */
+  function loadFailure() {
+    /** 错误区域正文最多 512 字符；超限视为未知页面，不扫描或点击其内容。 */
+    const MAX_ERROR_TEXT = 512;
+    const main = document.querySelector('main');
+    if (!main || composer() || document.querySelector('[data-testid^="conversation-turn-"],[data-turn-key]')) return null;
+    const buttons = main.querySelectorAll('button');
+    if (buttons.length > MAX_NODES) return null;
+    const available = Array.from(buttons).filter(button => !button.disabled && button.getAttribute('aria-disabled') !== 'true' &&
+      button.getClientRects().length > 0 && !button.closest('[hidden],[aria-hidden="true"],[inert]') && /^(?:重试|Retry)$/i.test(button.textContent?.trim() || ''));
+    if (available.length !== 1) return null;
+    const panel = available[0].parentElement?.parentElement;
+    const text = panel?.textContent?.replace(/\s+/g, ' ').trim() || '';
+    if (!panel || !main.contains(panel) || text.length > MAX_ERROR_TEXT ||
+        !/^(?:无法加载此\s*ChatGPT\s*对话|Unable to load (?:this )?(?:ChatGPT )?conversation)\s*(?:重试|Retry)$/i.test(text)) return null;
+    return available[0];
   }
 
   /** 从 node 的原始 Fiber 指针还原当前已提交路径；不修改 React 指针，不保留跨快照引用。 */
@@ -133,18 +161,31 @@ export async function pageAction(action = 'snapshot', input = null) {
     const route = location.pathname.match(/^(?:\/g\/[^/]+)?\/c\/([a-f\d-]{36})\/?$/i);
     const conversation = route?.[1] || null;
     const editor = composer();
-    const busy = Boolean(document.querySelector('[data-testid="stop-button"],button[aria-label="Stop streaming"],button[aria-label="停止生成"]')) ||
+    const busy = Boolean(document.querySelector('[data-testid="stop-button"],button[aria-label="Stop streaming"],button[aria-label="停止生成"]') ||
+      editor?.closest('form')?.querySelector('button[aria-label="Stop"],button[aria-label="停止"]')) ||
       [...(editor?.closest('form')?.querySelectorAll('button svg path') || [])].some(path => /^\s*M4\.5 5\.75/.test(path.getAttribute('d') || ''));
     const base = { url: location.href, supported: false, busy, draft: Boolean(editor?.textContent?.trim()) || attachments(),
       blocked: false, interrupted: false, toolsBusy: false, approval: false, userId: null, userText: '', reply: null,
       unsupportedReason: 'unsupported', activity: { source_turn: '', revision: activity.revision, stop_requested: false,
         model: '', deliberate: false, thinking_failed: false, rate_limited: false, retry_after: 0 } };
-    if (!editor) return base;
+    if (!editor) return conversation && loadFailure() ? { ...base, unsupportedReason: 'conversation_load_failed' } : base;
     const rows = document.querySelectorAll('[data-testid^="conversation-turn-"],[data-turn-key]');
     // 项目首页的首发仍会进入同一 /g/g-p-…/c/…；仅识别明确项目 ID，不放宽到项目设置或其他子页。
     if (!conversation && rows.length === 0) return { ...base, supported: location.pathname === '/' ||
       /^\/g\/[A-Za-z0-9_-]+\/?$/.test(location.pathname) || /^\/g\/g-p-[a-f\d]{32}(?:-[A-Za-z0-9_-]+)?\/project\/?$/i.test(location.pathname) };
     const row = rows[rows.length - 1];
+    // 当前回合的公开恢复状态不是 alert；只读取明确的状态节点，不匹配正文或历史回合里的引用。
+    const recoveryStatuses = row?.querySelectorAll('[role="status"] .text-chatgpt-recovery') || [];
+    for (let index = Math.max(0, recoveryStatuses.length - MAX_NODES); index < recoveryStatuses.length; index++) {
+      const status = recoveryStatuses[index];
+      const text = status.textContent || '';
+      if (text.length <= MAX_STATUS_TEXT && status.getClientRects().length > 0 && !status.closest('[hidden],[aria-hidden="true"],[inert]') &&
+          /^(?:连接已中断|Connection (?:interrupted|lost|disconnected))/i.test(text)) base.interrupted = true;
+    }
+    // 仅使用当前输入框的公开模型菜单识别高推理档位；不读取私有推理或猜测未显示的模型。
+    const modelControl = editor.closest('form')?.querySelector('button[aria-label="选择 ChatGPT 模型"],button[aria-label="Choose ChatGPT model"],button[aria-label="Select ChatGPT model"]');
+    const modelText = modelControl?.textContent || '';
+    base.activity.deliberate = modelText.length <= MAX_STATUS_TEXT && /极高|思考强度高|扩展|\b(?:high|heavy|extended)\b/i.test(modelText);
     // 当前回合和全局提示会阻止发送；历史回合的已保留错误不阻塞后续任务。
     const alerts = document.querySelectorAll('[data-testid="conversation-turn-error"],main [role="alert"]');
     for (let index = Math.max(0, alerts.length - MAX_NODES); index < alerts.length; index++) {
@@ -160,7 +201,7 @@ export async function pageAction(action = 'snapshot', input = null) {
           if (wait) base.activity.retry_after = Math.min(MAX_RETRY_SECONDS, Number(wait[1]) * (/minute|分钟/i.test(wait[2]) ? 60 : /hour|小时/i.test(wait[2]) ? 3600 : 1));
         } else if (/thinking failed|reasoning failed|思考失败|推理失败/i.test(text)) {
           base.interrupted = true; base.activity.thinking_failed = true;
-        } else if (/interrupted|network error|something went wrong|中断|网络错误/i.test(text)) base.interrupted = true;
+        } else if (/interrupted|network error|something went wrong|message.*(?:timed out|timeout)|中断|网络错误|(?:消息传输|连接|请求)超时/i.test(text)) base.interrupted = true;
         else base.blocked = true;
       }
     }
@@ -184,7 +225,7 @@ export async function pageAction(action = 'snapshot', input = null) {
     for (const node of nodes) {
       let fiber = committedFiber(node);
       let messages = null;
-      let sourceTurn = '', model = '', deliberate = false;
+      let sourceTurn = '', model = '', deliberate = base.activity.deliberate;
       const owners = new Set();
       for (let depth = 0; fiber && depth < MAX_CLIMB; depth++, fiber = fiber.return) {
         const props = fiber.memoizedProps;
@@ -238,6 +279,13 @@ export async function pageAction(action = 'snapshot', input = null) {
 
   const page = snapshot();
   if (action === 'snapshot' || action === 'arm') return page;
+  if (action === 'retry_load') {
+    // 重试只重新读取当前确切会话，不发送消息；页面恢复、导航或出现内容后立即拒绝。
+    const button = input?.url === page.url && page.unsupportedReason === 'conversation_load_failed' ? loadFailure() : null;
+    if (!button || location.href !== input.url) return { retried: false };
+    button.click();
+    return { retried: true };
+  }
   /** 发送正文最多 65,536 字符，覆盖完整工作流及目标控制提示；拒绝超限而非截断。 */
   const MAX_PROMPT = 65536;
   if (action !== 'send' || !input || typeof input.text !== 'string' || input.text.length > MAX_PROMPT ||
@@ -246,9 +294,38 @@ export async function pageAction(action = 'snapshot', input = null) {
       (!page.reply?.terminal && input.recovery !== true) || page.busy || page.draft || page.blocked || page.approval || page.toolsBusy || page.activity.stop_requested || page.activity.rate_limited || activity.cancelled.has(input.id)) return { sent: false, definite: true, cleared: !page.draft, reason: 'preflight' };
   const editor = composer();
   if (!editor?.isContentEditable) return { sent: false, definite: true, cleared: true, reason: 'editor' };
+  /** 核对本次正文；ProseMirror 的 p 边界表示一个换行，innerText 额外的排版空行不属于消息。 */
+  function ownsText() {
+    if (editor.innerText.replace(/\r/g, '') === input.text) return true;
+    if (!editor.classList.contains('ProseMirror') || editor.childNodes.length > MAX_PROMPT) return false;
+    /** 仅序列化纯文本段落和换行；未知富文本节点拒绝，不折叠空白或忽略人工改动。 */
+    const paragraphs = [];
+    /** 本次读取的字符数和节点数均不超过正文上限，避免大量空节点或超长文本占用内存。 */
+    let length = 0, nodes = 0;
+    for (const paragraph of editor.childNodes) {
+      if (paragraph.nodeType !== Node.ELEMENT_NODE || paragraph.tagName !== 'P') return false;
+      if (paragraphs.length && ++length > MAX_PROMPT) return false;
+      const parts = [];
+      for (const child of paragraph.childNodes) {
+        if (++nodes > MAX_PROMPT) return false;
+        let part = '';
+        if (child.nodeType === Node.TEXT_NODE) part = child.textContent;
+        else if (child.nodeType === Node.ELEMENT_NODE && child.tagName === 'BR') {
+          if (!child.classList.contains('ProseMirror-trailingBreak')) part = '\n';
+          else if (child !== paragraph.lastChild) return false;
+        } else return false;
+        length += part.length;
+        if (length > MAX_PROMPT) return false;
+        parts.push(part);
+      }
+      const text = parts.join('');
+      paragraphs.push(text);
+    }
+    return paragraphs.join('\n') === input.text;
+  }
   /** 只清理本次插入且用户未改动的正文；存在附件或用户编辑时保持原样并拒绝重试。 */
   function unsent(reason) {
-    if (editor.isConnected && !attachments() && editor.innerText.replace(/\r/g, '') === input.text) {
+    if (editor.isConnected && !attachments() && ownsText()) {
       editor.focus();
       const selected = window.getSelection(), owned = document.createRange();
       owned.selectNodeContents(editor); selected.removeAllRanges(); selected.addRange(owned);
@@ -266,11 +343,15 @@ export async function pageAction(action = 'snapshot', input = null) {
   /** 最多等待一秒让受控输入框更新；每次等待后都重新核对 URL、用户和草稿。 */
   const INPUT_ATTEMPTS = 10, INPUT_DELAY_MS = 100;
   for (let attempt = 0; attempt < INPUT_ATTEMPTS; attempt++) {
+    // 输入框可能异步整理段落；先让本次编辑提交，再重新核对全部发送条件。
+    await new Promise(resolve => setTimeout(resolve, INPUT_DELAY_MS));
     const current = snapshot();
     if (current.url !== input.url || current.userId !== input.userId || current.userText !== input.userText ||
         current.reply?.id !== input.replyId || current.reply?.text !== input.replyText || (!current.reply?.terminal && input.recovery !== true) || current.busy || current.blocked || current.approval || current.toolsBusy ||
         current.activity.stop_requested || current.activity.rate_limited || attachments() || activity.cancelled.has(input.id) ||
-        editor.innerText.replace(/\r/g, '') !== input.text || !editor.isConnected) return unsent('changed');
+        !editor.isConnected) return unsent('changed');
+    // 未同步或被人工改写的正文都不能发送；只在有界等待内重新核对，不覆盖现有内容。
+    if (!ownsText()) continue;
     // 仅在刚核对的输入框所属表单中找发送按钮；新版 submit 后备不能命中页面其他表单。
     const host = editor.closest('form') || editor.parentElement;
     const selector = '[data-testid="send-button"],#composer-submit-button' + (host?.hasAttribute('data-chatgpt-composer') ? ',button[type="submit"]' : '');
@@ -283,8 +364,6 @@ export async function pageAction(action = 'snapshot', input = null) {
       // 点击仅表示已尝试；worker 仍须从公开模型核对 WC_SEND 回执。
       return { sent: true };
     }
-    // resolve 只负责本次有界等待，不保留页面或扩展资源。
-    await new Promise(resolve => setTimeout(resolve, INPUT_DELAY_MS));
   }
   return unsent('send_button');
 }
