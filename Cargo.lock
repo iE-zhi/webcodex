@@ -5137,7 +5137,6 @@ dependencies = [
  "webcodex-admin",
  "webcodex-build-info",
  "webcodex-code-mode",
- "webcodex-continuation",
  "webcodex-core",
  "webcodex-environment",
  "webcodex-openai-tunnel",
@@ -5224,23 +5223,6 @@ dependencies = [
  "windows",
  "windows-sys 0.61.2",
  "xcap",
-]
-
-[[package]]
-name = "webcodex-continuation"
-version = "0.5.0"
-dependencies = [
- "libc",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "url",
- "uuid",
- "webcodex-core",
 ]
 
 [[package]]

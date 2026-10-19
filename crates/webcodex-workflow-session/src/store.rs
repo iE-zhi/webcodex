@@ -90,8 +90,6 @@ mod scale_tests;
 
 #[derive(Debug, Clone)]
 pub struct SessionStore {
-    /// 当前进程的确切在途调用，历史事件淘汰不删除身份；锁顺序为 inner 再此锁。
-    pub(super) continuation_calls: Arc<Mutex<super::continuation_activity::CurrentCalls>>,
     /// Shared session map and LRU metadata.
     /// `pub(super)` so sibling modules can lock and call `SessionStoreInner`
     /// transition helpers without touching the maps directly.
@@ -172,7 +170,6 @@ impl SessionStore {
                 persistence: None,
             })),
             persistence_write_mutex: Arc::new(Mutex::new(())),
-            continuation_calls: Default::default(),
             writer: None,
             message_observation_notify,
             #[cfg(any(test, feature = "root-test-support"))]
@@ -239,7 +236,6 @@ impl SessionStore {
         Self {
             inner,
             persistence_write_mutex,
-            continuation_calls: Default::default(),
             writer,
             message_observation_notify,
             #[cfg(any(test, feature = "root-test-support"))]
@@ -1413,17 +1409,7 @@ impl SessionStore {
         )
     }
 
-    /// 保存真实调用开始事件并返回共享生命周期凭据；未结束的最后一个凭据销毁后标为结果未知。
-    /// # 参数
-    /// - `session_id`：所属 Session，None、非法或不存在时不记录并返回 None。
-    /// - `transport`：可信调用入口类型。
-    /// - `tool_name`：规范工具名，用于分类和安全事件摘要。
-    /// - `arguments`：本次输入，只提取允许的摘要、路径及断言，不保存完整正文。
-    /// - `resolved_project`：运行时解析项目，转移给凭据和事件，None 表示无需项目。
-    /// - `metadata`：可信逻辑调用身份和结果断言，消费后存入事件/凭据。
-    /// - `contract`：规范工具契约，不来自外部输入。
-    /// # 返回
-    /// 返回凭据交回本 Store 或其克隆记录结束；同步记录锁不跨 await，不能把 Future 取消当作外部回滚。
+    /// Sole entry for appending a `tool_call_started` ledger event.
     pub fn record_tool_call_started_with_metadata(
         &self,
         session_id: Option<&str>,
@@ -1455,11 +1441,6 @@ impl SessionStore {
         let input_summary = Some(session_input_summary_for_tool(tool_name, arguments));
         let expectation = metadata.expectation;
         let start = ToolCallStart {
-            continuation_lifetime: crate::continuation_activity::CallLifetime::new(
-                &self.continuation_calls,
-                session_id,
-                &call_id,
-            ),
             event_id: event_id.clone(),
             call_id: call_id.clone(),
             logical_invocation_id: metadata.logical_invocation_id.clone(),
@@ -1627,13 +1608,6 @@ impl SessionStore {
         Some(event_id)
     }
 
-    /// 消费开始凭据生成结束事件，发布真实完成后才销毁共享凭据；调用方负责把事件写回原 Store。
-    /// # 参数
-    /// - `start`：原 Store 创建的凭据，None 时返回 None；不能从其他 Store 移入。
-    /// - `success`：工具实际成功状态，不由预期失败覆盖。
-    /// - `output`：实际输出，只保存允许的安全摘要和证据。
-    /// - `error`：可选实际失败，用于分类和安全摘要，不保存完整正文。
-    /// - `error_kind`：可信调用方给出的错误类别，优先于推断类别。
     fn tool_call_finished_event(
         start: Option<ToolCallStart>,
         success: bool,
@@ -1642,7 +1616,6 @@ impl SessionStore {
         error_kind: Option<&str>,
     ) -> Option<SessionEvent> {
         let start = start?;
-        start.continuation_lifetime.complete();
         let finished_at = now_ts();
         let duration_ms = start
             .started_instant
@@ -2104,10 +2077,7 @@ impl SessionStore {
         true
     }
 
-    /// 追加已确认 Session 的事件，并同步当前进程的开始/结束身份；不向模型暴露工具正文。
-    /// # 参数
-    /// - `event`：可信记录器产生的事件，包含确切 Session 和调用 ID；超出历史保留窗只淘汰历史。
-    /// 在 inner 锁内再持有在途集合锁，不跨 await；跟踪容量或锁异常会保守阻止自动续跑。
+    /// Sole entry for appending a session ledger event.
     fn push_event(&self, event: SessionEvent) {
         let session_id = event.session_id.clone();
         let mut event = Some(event);
@@ -2121,14 +2091,6 @@ impl SessionStore {
             let Some(stored) = inner.sessions.get_mut(&session_id) else {
                 return;
             };
-            if let Some(event) = event.as_ref() {
-                let mut calls = self.continuation_calls.lock().unwrap_or_else(|error| {
-                    let mut calls = error.into_inner();
-                    calls.incomplete = true;
-                    calls
-                });
-                calls.observe(event);
-            }
             match stored {
                 StoredSession::Hot(record) => {
                     record.updated_at = now_ts();

@@ -126,7 +126,6 @@ fn unrestricted_test_policy() -> RunnerPolicy {
 
 fn test_config(project_registry_dir: PathBuf) -> RunnerConfig {
     RunnerConfig {
-        continuation: Default::default(),
         server_url: "http://127.0.0.1:8000".to_string(),
         server_url_override: None,
         token: "test-token".to_string(),

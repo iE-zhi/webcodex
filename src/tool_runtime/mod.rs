@@ -30,7 +30,6 @@ mod coding_task_tools;
 mod communication;
 mod computer_tools;
 pub(crate) mod context_projection;
-mod continuation;
 mod continuation_feedback;
 pub(crate) mod control_sidecar;
 pub(crate) mod conversation_import;

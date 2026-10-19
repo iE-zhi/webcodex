@@ -5,7 +5,6 @@ mod audit;
 mod closeout;
 mod console;
 mod continuation;
-mod continuation_activity;
 #[cfg(test)]
 mod continuation_tests;
 mod events;
@@ -17,7 +16,6 @@ mod messages;
 mod model;
 mod persistence;
 mod query;
-pub use continuation_activity::ContinuationActivity;
 mod store;
 mod task_context;
 #[cfg(test)]

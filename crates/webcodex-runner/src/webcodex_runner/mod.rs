@@ -7,7 +7,6 @@ pub(crate) mod computer;
 pub(crate) mod computer_session;
 pub(crate) mod config;
 pub(crate) mod configured_skills;
-pub(crate) mod continuation;
 pub(crate) mod detached_job;
 pub(crate) mod dispatch;
 pub(crate) mod execution_io;

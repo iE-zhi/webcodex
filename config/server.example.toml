@@ -14,8 +14,6 @@ bindings_file = "/etc/webcodex/runner-bindings.toml"
 profile_id = "main"
 tunnel_id = "tunnel_0123456789abcdef0123456789abcdef"
 api_key_file = "/etc/webcodex/secrets/openai-control-plane-key"
-# Account PAT for MCP; native continuation requires the same account as the extension, not bootstrap.
-# local_token_file = "/etc/webcodex/secrets/mcp-account-pat"
 autostart = true
 readiness_path = "/var/lib/webcodex/tunnel-readiness.json"
 

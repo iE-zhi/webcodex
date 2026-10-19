@@ -16,9 +16,6 @@ impl ToolRuntime {
         bootstrap_context: &mut Option<crate::tool_runtime::coding_task::BootstrapContext>,
     ) -> ToolResult {
         match call {
-            call @ ToolCall::UpdateTaskContinuation { .. } => {
-                self.update_task_continuation_tool(call, auth, window).await
-            }
             call @ (ToolCall::StartSession { .. }
             | ToolCall::ListSessions { .. }
             | ToolCall::SessionSummary { .. }

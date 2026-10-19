@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "crates/webcodex-continuation",
     "crates/webcodex-admin",
     "crates/webcodex-build-info",
     "crates/webcodex-browser",
@@ -54,7 +53,6 @@ name = "webcodex-server"
 path = "src/bin/webcodex-server.rs"
 
 [dependencies]
-webcodex-continuation = { path = "crates/webcodex-continuation" }
 webcodex-openai-tunnel = { path = "crates/webcodex-openai-tunnel", version = "0.1.0", default-features = false }
 webcodex-build-info = { path = "crates/webcodex-build-info" }
 webcodex-code-mode = { path = "crates/webcodex-code-mode", optional = true }

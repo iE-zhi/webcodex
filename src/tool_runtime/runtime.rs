@@ -104,8 +104,6 @@ impl ValidationTerminalReconciliationTestHook {
 
 #[derive(Clone)]
 pub struct ToolRuntime {
-    /// 与浏览器 HTTP 共用的账户续跑账本；None 表示该运行时未启用此能力。
-    pub(crate) chat_continuations: Option<Arc<webcodex_continuation::Controller>>,
     pub runner_registry: Arc<RunnerRegistry>,
     pub(crate) mcp_gateway: Arc<crate::mcp_gateway::McpGatewayRuntime>,
     pub(crate) plugin_gateway: Arc<crate::plugin_gateway::PluginGatewayRuntime>,
@@ -225,7 +223,6 @@ pub struct ToolRuntime {
 impl ToolRuntime {
     pub fn new(runner_registry: Arc<RunnerRegistry>, runtime_info: Arc<RuntimeInfo>) -> Self {
         Self {
-            chat_continuations: None,
             runner_registry,
             mcp_gateway: Arc::new(crate::mcp_gateway::McpGatewayRuntime::default()),
             plugin_gateway: Arc::new(crate::plugin_gateway::PluginGatewayRuntime::default()),
@@ -294,17 +291,6 @@ impl ToolRuntime {
     /// Attach a durable workspace-activity recorder (server wiring).
     pub fn with_activity_recorder(mut self, recorder: Arc<dyn ActivityRecorder>) -> Self {
         self.activity = recorder;
-        self
-    }
-
-    /// 注入 Server 已打开的唯一续跑账本，所有运行时克隆共享控制版本与投递债务。
-    /// # 参数
-    /// - `controller`：Server 生命周期持有的私有账本，不接受模型指定路径或替换。
-    pub(crate) fn with_chat_continuations(
-        mut self,
-        controller: Arc<webcodex_continuation::Controller>,
-    ) -> Self {
-        self.chat_continuations = Some(controller);
         self
     }
 

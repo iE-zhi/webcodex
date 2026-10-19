@@ -2,21 +2,10 @@ use super::RouteAuth::AuthMiddleware;
 use super::{route, AuditClass::*, RouteId::*, RouteMethod::*, RouteSpec, RouteSurface::*};
 use webcodex_core::authority::{
     OAuthBodyAwarePolicy, OAuthRouteScopePolicy::*, SCOPE_JOB_RUN, SCOPE_PROJECT_WRITE,
-    SCOPE_RUNNER_MANAGE, SCOPE_RUNTIME_READ, SCOPE_SESSION_COLLABORATE,
+    SCOPE_RUNNER_MANAGE, SCOPE_RUNTIME_READ,
 };
 
-/// 认证后的 Runtime API 路由及固定 scope；续跑接口额外要求稳定账户和任务所有权。
 pub(super) const ROUTES: &[RouteSpec] = &[
-    // 操作内部继续校验稳定账户及任务所有权，不接受匿名或 Runner token。
-    route(
-        Continuations,
-        Post,
-        "/api/continuations",
-        Require(SCOPE_SESSION_COLLABORATE),
-        RuntimeApi,
-        Command,
-        AuthMiddleware,
-    ),
     route(
         ToolsList,
         Post,

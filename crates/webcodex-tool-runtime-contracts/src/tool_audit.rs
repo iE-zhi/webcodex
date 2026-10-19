@@ -2151,18 +2151,6 @@ impl ToolCallAuditProjection for ToolCall {
             Self::PresentDocx { project, path } => {
                 serde_json::json!({"project": project, "path": path})
             }
-            Self::UpdateTaskContinuation {
-                task_id,
-                generation,
-                session_id,
-                action,
-                request_id,
-                decision,
-                ..
-            } => serde_json::json!({
-                "task_id":task_id,"generation":generation,"session_id":session_id,
-                "action":action,"request_id":request_id,"decision":decision,
-            }),
             Self::PresentPdf { project, path }
             | Self::ReadAppArtifactChunk { project, path, .. } => {
                 serde_json::json!({

@@ -95,6 +95,3 @@ mod write_project_file;
 mod external_observations;
 
 mod docx_document;
-
-#[path = "../../../tests/chat-continuation/runtime.rs"]
-mod continuation_runtime;
